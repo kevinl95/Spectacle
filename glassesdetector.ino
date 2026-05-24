@@ -77,7 +77,6 @@ static bool              g_new_detection_flag = false;
 static int               g_battery_level = -1;
 static int               g_battery_voltage_mv = 0;
 static int               g_battery_filtered_mv = 0;
-static int8_t            g_battery_charge_state = -1;
 static uint32_t          g_last_battery_sample_time = 0;
 static uint32_t          g_next_battery_sample_at = 0;
 
@@ -247,31 +246,6 @@ void updateDisplayedBatteryLevel(int estimated_level, int charge_state) {
   g_battery_level += (diff > 0) ? 1 : -1;
 }
 
-char batteryStatusMarker(int charge_state) {
-  if (charge_state == 1) {
-    return '+';
-  }
-  if (charge_state == 0) {
-    return '-';
-  }
-  return '?';
-}
-
-void formatBatteryStatus(char* buffer, size_t buffer_size) {
-  if (g_battery_voltage_mv > 0) {
-    int whole_volts = g_battery_voltage_mv / 1000;
-    int frac_volts = abs(g_battery_voltage_mv % 1000) / 10;
-    snprintf(buffer, buffer_size, "%d.%02dV%c", whole_volts, frac_volts, batteryStatusMarker(g_battery_charge_state));
-    return;
-  }
-
-  int batt = g_battery_level;
-  if (batt < 0) {
-    batt = M5.Power.getBatteryLevel();
-  }
-  snprintf(buffer, buffer_size, "BAT:%d%%", batt);
-}
-
 void refreshBatteryStatus(bool force = false) {
   uint32_t now = millis();
 
@@ -314,7 +288,6 @@ void refreshBatteryStatus(bool force = false) {
     }
 
     g_battery_voltage_mv = g_battery_filtered_mv;
-    g_battery_charge_state = charge_state;
     updateDisplayedBatteryLevel(batteryLevelFromMillivolts(g_battery_filtered_mv), charge_state);
   } else {
     g_battery_level = M5.Power.getBatteryLevel();
@@ -606,11 +579,6 @@ void drawStatusBar() {
   M5.Lcd.setTextSize(1);
   M5.Lcd.setCursor(4, 2);
   M5.Lcd.printf("Scan #%lu  RSSI>%d", g_scan_count, g_scan_config.rssi_threshold);
-
-  char battery_text[12];
-  formatBatteryStatus(battery_text, sizeof(battery_text));
-  M5.Lcd.setCursor(M5.Lcd.width() - 56, 2);
-  M5.Lcd.print(battery_text);
 }
 
 void drawClearScreen() {
