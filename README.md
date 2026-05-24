@@ -1,5 +1,7 @@
 # Spectacle - Smart Glasses Detecting Keychain
 
+[![Weekly Firmware Release](https://github.com/kevinl95/Spectacle/actions/workflows/weekly-firmware.yml/badge.svg)](https://github.com/kevinl95/Spectacle/actions/workflows/weekly-firmware.yml)
+
 A passive BLE smart glasses detector for the M5Stack StickS3. Scans for Bluetooth Low Energy advertisements from known smart glasses (Meta Ray-Ban, Snap Spectacles, etc.) and alerts you when they're nearby.
 
 ## Why hardware?
