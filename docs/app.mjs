@@ -1,6 +1,8 @@
-import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.6.0/lib/index.js";
-
 const manifestUrl = "./latest-release.json";
+const esptoolModuleUrl = "https://cdn.jsdelivr.net/npm/esptool-js@0.6.0/+esm";
+
+let ESPLoaderClass = null;
+let TransportClass = null;
 
 const state = {
   manifest: null,
@@ -81,6 +83,25 @@ function isSerialSupported() {
 
 function setPill(element, text) {
   element.textContent = text;
+}
+
+
+async function ensureEsptoolLoaded() {
+  if (ESPLoaderClass && TransportClass) {
+    return;
+  }
+
+  try {
+    const module = await import(esptoolModuleUrl);
+    ESPLoaderClass = module.ESPLoader;
+    TransportClass = module.Transport;
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? `Failed to load flasher module: ${error.message}`
+        : `Failed to load flasher module: ${String(error)}`
+    );
+  }
 }
 
 
@@ -190,13 +211,19 @@ async function connectDevice() {
     return;
   }
 
+  if (!isSerialSupported()) {
+    appendLog("Web Serial is not available in this browser. Use Chrome or Edge to flash.\n");
+    return;
+  }
+
   setBusy(true);
   appendLog("Requesting serial port access...\n");
 
   try {
+    await ensureEsptoolLoaded();
     const port = await navigator.serial.requestPort();
-    const transport = new Transport(port, false);
-    const loader = new ESPLoader({
+    const transport = new TransportClass(port, false);
+    const loader = new ESPLoaderClass({
       transport,
       baudrate: state.manifest.baudRate,
       terminal,
