@@ -14,7 +14,6 @@ const state = {
 
 const elements = {
   manifestState: document.querySelector("#manifestState"),
-  serialState: document.querySelector("#serialState"),
   connectionState: document.querySelector("#connectionState"),
   releaseTag: document.querySelector("#releaseTag"),
   releaseDate: document.querySelector("#releaseDate"),
@@ -362,12 +361,6 @@ async function flash(mode) {
 
 
 function initialise() {
-  if (isSerialSupported()) {
-    setPill(elements.serialState, "Web Serial is available");
-  } else {
-    setPill(elements.serialState, "Use Chrome or Edge with Web Serial enabled");
-  }
-
   renderConnectionState();
   updateButtonState();
 
