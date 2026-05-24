@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-generate_config.py - GlassesDetector Config Generator
+generate_config.py - Spectacle Config Generator
 
 Pulls company IDs from the Nordic Semiconductor Bluetooth Numbers Database
 and cross-references them with a curated list of smart glasses manufacturers
-to produce an up-to-date config.json for the GlassesDetector firmware.
+to produce an up-to-date config.json for the Spectacle firmware.
 
 *** THIS FILE IS THE SINGLE SOURCE OF TRUTH FOR DEVICE SIGNATURES. ***
 
@@ -50,178 +50,136 @@ NORDIC_DB_URL = (
 #   4. Submit a PR with your changes to THIS FILE only
 #
 # To add sniffed BLE data for an existing device:
-#   1. Use nRF Connect or similar to capture advertisements from the glasses
-#   2. Note: service UUIDs, device name, advertisement payload length
-#   3. Update the corresponding entry below with real values
+#   1. Use nRF Connect or similar to capture advertisements
+#   2. Note: manufacturer data payload (look for ASCII strings), device name
+#   3. Update the corresponding entry below
 #   4. Submit a PR with your changes to THIS FILE only
 #
+# Detection logic (firmware side):
+#   1. If manufacturer_ids is non-empty, one of them must match
+#   2. If payload_strings is non-empty, at least one must appear in the
+#      manufacturer data payload (e.g., Ray-Bans broadcast "META_RB_GLASS")
+#   3. If name_prefixes is non-empty, the BLE device name must start with one
+#   All defined checks must pass. Undefined checks are skipped.
+#
 # Fields:
-#   search_names:          list of substrings to match in Nordic DB (case-insensitive)
-#   device_id:             unique ID for the config entry
-#   label:                 human-readable display name on the StickS3 screen
-#   category:              "glasses" = confirmed smart glasses maker
-#                          "glasses_and_other" = makes glasses AND other BLE devices
-#                          "meta_ambiguous" = Meta IDs shared across Ray-Ban + Quest
-#   name_prefixes:         known BLE device name prefixes (from real scans)
-#   service_uuids:         known BLE service UUIDs (from real scans)
-#   adv_data_length_range: [min, max] advertisement payload length (0,0 = unknown)
-#   notes:                 documentation string
-#   has_camera:            whether the glasses have an onboard camera
+#   search_names:    list of substrings to match in Nordic DB (case-insensitive)
+#   device_id:       unique ID for the config entry
+#   label:           human-readable name shown on the StickS3 screen
+#   has_camera:      whether the glasses have a camera (affects alert color)
+#   name_prefixes:   known BLE device name prefixes (from real scans)
+#   payload_strings: strings to match in manufacturer data payload (from real scans)
+#                    e.g., Ray-Bans include "META_RB_GLASS" after the company ID
+#   notes:           documentation string
 
 GLASSES_MANUFACTURERS = [
     {
         "search_names": ["luxottica"],
-        "device_id": "meta_rayban",
+        "device_id": "meta_rayban_luxottica",
         "label": "Meta Ray-Ban",
-        "category": "glasses",
-        "name_prefixes": ["Ray-Ban"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Luxottica - manufactures Meta Ray-Ban smart glasses. Strong glasses indicator.",
         "has_camera": True,
-    },
-    {
-        "search_names": ["meta platforms, inc"],
-        "device_id": "meta_platform",
-        "label": "Meta (Generic)",
-        "category": "meta_ambiguous",
         "name_prefixes": [],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Meta Platforms Inc - could be Ray-Ban smart glasses OR Quest VR headset.",
-        "has_camera": True,
+        "payload_strings": [],
+        "notes": "Luxottica company ID (0x0D53). Luxottica only makes eyewear, so this ID alone is a strong glasses indicator.",
     },
     {
         "search_names": ["meta platforms technologies"],
-        "device_id": "meta_tech",
-        "label": "Meta Technologies",
-        "category": "meta_ambiguous",
-        "name_prefixes": [],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Meta Platforms Technologies - could be Ray-Ban OR Quest.",
+        "device_id": "meta_rayban_confirmed",
+        "label": "Meta Ray-Ban",
         "has_camera": True,
+        "name_prefixes": [],
+        "payload_strings": ["META_RB_GLASS"],
+        "notes": "Meta Platforms Technologies ID (0x058E) with payload string 'META_RB_GLASS'. Confirmed Ray-Ban — payload string eliminates Quest false positives.",
+    },
+    {
+        "search_names": ["meta platforms, inc"],
+        "device_id": "meta_rayban_generic",
+        "label": "Meta Ray-Ban",
+        "has_camera": True,
+        "name_prefixes": [],
+        "payload_strings": ["META_RB_GLASS"],
+        "notes": "Meta Platforms Inc ID (0x01AB) with payload string 'META_RB_GLASS'. Only triggers on confirmed Ray-Ban payload, not Quest.",
     },
     {
         "search_names": ["snap inc", "snapchat"],
         "device_id": "snap_spectacles",
         "label": "Snap Spectacles",
-        "category": "glasses",
-        "name_prefixes": ["Spectacles"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Snapchat Inc - Spectacles smart glasses with camera.",
         "has_camera": True,
+        "name_prefixes": ["Spectacles"],
+        "payload_strings": [],
+        "notes": "Snapchat Inc (0x03C2). Snap mainly makes Spectacles for BLE devices.",
     },
     {
         "search_names": ["tcl communication"],
         "device_id": "tcl_rayneo",
         "label": "TCL RayNeo",
-        "category": "glasses_and_other",
-        "name_prefixes": ["RayNeo"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "TCL - makes RayNeo AR glasses. Also makes phones/tablets (false positive risk).",
         "has_camera": True,
+        "name_prefixes": ["RayNeo"],
+        "payload_strings": [],
+        "notes": "TCL makes RayNeo AR glasses but also phones/tablets. Name prefix required to avoid false positives.",
     },
     {
         "search_names": ["even realities"],
         "device_id": "even_realities",
         "label": "Even Realities G1",
-        "category": "glasses",
-        "name_prefixes": ["G1", "Even"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Even Realities G1 AI glasses. No camera but AI-enabled display.",
         "has_camera": False,
+        "name_prefixes": ["G1", "Even"],
+        "payload_strings": [],
+        "notes": "Even Realities G1 AI glasses. No camera, AI display only.",
     },
     {
         "search_names": ["solos technology"],
         "device_id": "solos_airgo",
         "label": "Solos AirGo",
-        "category": "glasses",
-        "name_prefixes": ["AirGo", "Solos"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Solos AirGo smart glasses with AI assistant.",
         "has_camera": False,
+        "name_prefixes": ["AirGo", "Solos"],
+        "payload_strings": [],
+        "notes": "Solos AirGo smart glasses with AI assistant. No camera.",
     },
     {
         "search_names": ["xreal"],
         "device_id": "xreal",
         "label": "XREAL",
-        "category": "glasses",
-        "name_prefixes": ["XREAL"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "XREAL (formerly Nreal) AR glasses.",
         "has_camera": False,
+        "name_prefixes": ["XREAL"],
+        "payload_strings": [],
+        "notes": "XREAL (formerly Nreal) AR display glasses.",
     },
     {
         "search_names": ["nreal"],
         "device_id": "nreal",
         "label": "Nreal",
-        "category": "glasses",
-        "name_prefixes": ["Nreal"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Nreal (now XREAL) - legacy company ID if registered separately.",
         "has_camera": False,
+        "name_prefixes": ["Nreal"],
+        "payload_strings": [],
+        "notes": "Nreal (now XREAL) - legacy company ID if registered separately.",
     },
     {
         "search_names": ["vuzix"],
         "device_id": "vuzix",
         "label": "Vuzix",
-        "category": "glasses",
-        "name_prefixes": ["Vuzix"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Vuzix smart glasses (enterprise and consumer).",
         "has_camera": True,
+        "name_prefixes": ["Vuzix"],
+        "payload_strings": [],
+        "notes": "Vuzix smart glasses (enterprise and consumer) with camera.",
     },
     {
         "search_names": ["brilliant labs"],
         "device_id": "brilliant_monocle",
         "label": "Brilliant Labs",
-        "category": "glasses",
-        "name_prefixes": ["Monocle", "Frame"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Brilliant Labs - Frame and Monocle AI glasses.",
         "has_camera": True,
+        "name_prefixes": ["Monocle", "Frame"],
+        "payload_strings": [],
+        "notes": "Brilliant Labs Frame and Monocle AI glasses with camera.",
     },
     {
         "search_names": ["essilor"],
         "device_id": "essilor",
         "label": "EssilorLuxottica",
-        "category": "glasses",
+        "has_camera": True,
         "name_prefixes": [],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
+        "payload_strings": [],
         "notes": "EssilorLuxottica - parent company of Luxottica, may have separate BLE IDs.",
-        "has_camera": True,
-    },
-    {
-        "search_names": ["google"],
-        "device_id": "google_glasses",
-        "label": "Google Glass",
-        "category": "glasses_and_other",
-        "name_prefixes": ["Glass"],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Google - makes many BLE devices. Only flag if name matches 'Glass'. Very high false positive risk.",
-        "has_camera": True,
-    },
-    {
-        "search_names": ["samsung"],
-        "device_id": "samsung_glasses",
-        "label": "Samsung Glasses",
-        "category": "glasses_and_other",
-        "name_prefixes": [],
-        "service_uuids": [],
-        "adv_data_length_range": [0, 0],
-        "notes": "Samsung - developing Project Moohan XR and smart glasses. Extremely high false positive risk from Galaxy phones/watches/buds.",
-        "has_camera": True,
     },
 ]
 
@@ -237,10 +195,7 @@ def fetch_nordic_db() -> list[dict]:
 
 
 def match_companies(nordic_db: list[dict]) -> dict[str, list[dict]]:
-    """Match Nordic DB entries against our curated glasses manufacturers.
-
-    Returns a dict mapping device_id -> list of matching Nordic DB entries.
-    """
+    """Match Nordic DB entries against our curated glasses manufacturers."""
     matches: dict[str, list[dict]] = {}
 
     for mfr in GLASSES_MANUFACTURERS:
@@ -260,50 +215,41 @@ def match_companies(nordic_db: list[dict]) -> dict[str, list[dict]]:
 def generate_config(
     matches: dict[str, list[dict]],
     include_no_camera: bool = True,
-    exclude_high_fp: bool = True,
 ) -> dict:
     """Generate a config.json structure from matched companies."""
 
-    # Build a lookup from device_id -> manufacturer metadata
     mfr_lookup = {m["device_id"]: m for m in GLASSES_MANUFACTURERS}
 
     devices = []
     for device_id, company_matches in matches.items():
         mfr = mfr_lookup[device_id]
 
-        # Skip devices with no camera if requested
         if not include_no_camera and not mfr.get("has_camera", False):
             continue
-
-        # Skip high-false-positive entries unless they have real manufacturer IDs
-        if exclude_high_fp and mfr["category"] == "glasses_and_other":
-            if not mfr["name_prefixes"]:
-                # No name prefixes = pure manufacturer ID match = too many FPs
-                print(f"  Skipping {device_id}: no name prefixes, high FP risk")
-                continue
 
         # Convert decimal codes to hex strings
         manufacturer_ids = [f"0x{c['code']:04X}" for c in company_matches]
 
-        if not manufacturer_ids and not mfr["name_prefixes"]:
-            print(f"  Skipping {device_id}: no manufacturer IDs or name prefixes found")
+        # Must have at least one matching signal the firmware can evaluate.
+        if not manufacturer_ids and not mfr["payload_strings"] and not mfr["name_prefixes"]:
+            print(
+                f"  Skipping {device_id}: no manufacturer IDs, payload strings, or name prefixes found"
+            )
             continue
 
         device_entry = {
             "id": device_id,
             "label": mfr["label"],
-            "category": mfr["category"],
-            "manufacturer_ids": manufacturer_ids,
-            "service_uuids": mfr["service_uuids"],
-            "name_prefixes": mfr["name_prefixes"],
-            "adv_data_length_range": mfr["adv_data_length_range"],
             "has_camera": mfr.get("has_camera", False),
+            "manufacturer_ids": manufacturer_ids,
+            "payload_strings": mfr["payload_strings"],
+            "name_prefixes": mfr["name_prefixes"],
             "notes": mfr["notes"],
         }
         devices.append(device_entry)
 
     config = {
-        "version": 1,
+        "version": 2,
         "source": "Generated by generate_config.py from Nordic Semiconductor Bluetooth Numbers Database",
         "nordic_db_url": NORDIC_DB_URL,
         "scan": {
@@ -314,14 +260,6 @@ def generate_config(
             "lcd_on_ms": 5000,
             "lcd_brightness": 128,
             "lcd_brightness_dim": 32,
-        },
-        "confidence": {
-            "manufacturer_id_match": 40,
-            "service_uuid_match": 30,
-            "name_prefix_match": 20,
-            "adv_length_match": 10,
-            "threshold_likely": 70,
-            "threshold_possible": 40,
         },
         "devices": devices,
     }
@@ -337,14 +275,16 @@ def print_scan_results(matches: dict[str, list[dict]]):
     for device_id, company_matches in matches.items():
         mfr = mfr_lookup[device_id]
         camera_str = "📷" if mfr.get("has_camera") else "  "
-        print(f"{camera_str} {mfr['label']} [{mfr['category']}]")
+        print(f"{camera_str} {mfr['label']} [{device_id}]")
 
         if company_matches:
             for c in company_matches:
                 print(f"    0x{c['code']:04X} ({c['code']:>5d})  {c['name']}")
         else:
-            print(f"    (no matching company ID found in Nordic DB)")
+            print("    (no matching company ID found in Nordic DB)")
 
+        if mfr["payload_strings"]:
+            print(f"    Payload strings: {mfr['payload_strings']}")
         if mfr["name_prefixes"]:
             print(f"    Name prefixes: {mfr['name_prefixes']}")
         print()
@@ -352,7 +292,7 @@ def print_scan_results(matches: dict[str, list[dict]]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate GlassesDetector config.json from Nordic BLE database"
+        description="Generate Spectacle config.json from Nordic BLE database"
     )
     parser.add_argument(
         "--output", "-o",
@@ -365,44 +305,22 @@ def main():
         help="Only scan and print matches, don't write config",
     )
     parser.add_argument(
-        "--include-no-camera",
-        action="store_true",
-        default=True,
-        help="Include glasses without cameras (default: True)",
-    )
-    parser.add_argument(
         "--camera-only",
         action="store_true",
         help="Only include glasses with cameras",
     )
-    parser.add_argument(
-        "--include-high-fp",
-        action="store_true",
-        help="Include high-false-positive entries like Samsung/Google without name filters",
-    )
     args = parser.parse_args()
 
-    # Fetch the database
     nordic_db = fetch_nordic_db()
-
-    # Match against our curated list
     matches = match_companies(nordic_db)
-
-    # Print results
     print_scan_results(matches)
 
     if args.scan_only:
         return
 
-    # Generate config
     include_no_camera = not args.camera_only
-    config = generate_config(
-        matches,
-        include_no_camera=include_no_camera,
-        exclude_high_fp=not args.include_high_fp,
-    )
+    config = generate_config(matches, include_no_camera=include_no_camera)
 
-    # Write output
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

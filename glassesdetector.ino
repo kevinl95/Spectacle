@@ -1,8 +1,14 @@
 /*
- * GlassesDetector - Smart Glasses BLE Scanner for M5Stack StickS3
+ * Spectacle - Smart Glasses BLE Scanner for M5Stack StickS3
  * 
  * Passively scans for BLE advertisements from known smart glasses
  * (Meta Ray-Ban, Snap Spectacles, etc.) and alerts the user.
+ * 
+ * Detection logic:
+ *   1. Match manufacturer company ID from BLE advertisement
+ *   2. Optionally match a payload string in manufacturer data
+ *      (e.g., Ray-Bans broadcast "META_RB_GLASS" in their payload)
+ *   3. Optionally match BLE device name prefix
  * 
  * Configuration is loaded from /config.json on SPIFFS.
  * 
@@ -19,24 +25,21 @@
 // ── Structs ──────────────────────────────────────────────────────────────────
 
 struct DeviceSignature {
-  String id;
-  String label;
-  String category;       // "glasses", "meta_ambiguous"
+  String   id;
+  String   label;
+  bool     has_camera;
   uint16_t manufacturer_ids[4];
   uint8_t  mfr_id_count;
-  String   service_uuids[4];
-  uint8_t  svc_uuid_count;
+  String   payload_strings[4];   // strings to find in manufacturer data payload
+  uint8_t  payload_str_count;
   String   name_prefixes[4];
   uint8_t  name_prefix_count;
-  uint16_t adv_len_min;
-  uint16_t adv_len_max;
 };
 
 struct Detection {
   String   label;
-  String   category;
+  bool     has_camera;
   int      rssi;
-  int      confidence;
   uint32_t timestamp;
 };
 
@@ -45,18 +48,9 @@ struct ScanConfig {
   uint32_t interval_ms;
   int      rssi_threshold;
   uint32_t display_timeout_ms;
-  uint32_t lcd_on_ms;           // how long LCD stays on after wake
-  uint8_t  lcd_brightness;      // 0-255
-  uint8_t  lcd_brightness_dim;  // dimmed level before off
-};
-
-struct ConfidenceWeights {
-  int manufacturer_id_match;
-  int service_uuid_match;
-  int name_prefix_match;
-  int adv_length_match;
-  int threshold_likely;
-  int threshold_possible;
+  uint32_t lcd_on_ms;
+  uint8_t  lcd_brightness;
+  uint8_t  lcd_brightness_dim;
 };
 
 // ── Globals ──────────────────────────────────────────────────────────────────
@@ -64,7 +58,6 @@ struct ConfidenceWeights {
 static DeviceSignature   g_signatures[16];
 static uint8_t           g_signature_count = 0;
 static ScanConfig        g_scan_config;
-static ConfidenceWeights g_weights;
 
 static Detection         g_detections[8];
 static uint8_t           g_detection_count = 0;
@@ -77,18 +70,17 @@ static uint32_t          g_scan_count = 0;
 // ── LCD & Power State ────────────────────────────────────────────────────────
 
 static bool              g_lcd_on = true;
-static uint32_t          g_lcd_wake_time = 0;     // when LCD was last turned on
-static bool              g_new_detection_flag = false;  // set in ISR/callback context
+static uint32_t          g_lcd_wake_time = 0;
+static bool              g_new_detection_flag = false;
 
 // ── Display Constants ────────────────────────────────────────────────────────
 
-static const uint16_t COLOR_BG        = TFT_BLACK;
-static const uint16_t COLOR_CLEAR     = 0x0400;  // dark green
-static const uint16_t COLOR_POSSIBLE  = 0xFDA0;  // amber/orange
-static const uint16_t COLOR_LIKELY    = 0xF800;  // red
-static const uint16_t COLOR_AMBIGUOUS = 0xFFE0;  // yellow
-static const uint16_t COLOR_TEXT      = TFT_WHITE;
-static const uint16_t COLOR_DIM       = 0x7BEF;  // gray
+static const uint16_t COLOR_BG       = TFT_BLACK;
+static const uint16_t COLOR_CLEAR    = 0x0400;  // dark green
+static const uint16_t COLOR_CAMERA   = 0xF800;  // red - has camera
+static const uint16_t COLOR_NOCAM    = 0xFDA0;  // amber - no camera
+static const uint16_t COLOR_TEXT     = TFT_WHITE;
+static const uint16_t COLOR_DIM      = 0x7BEF;  // gray
 
 // ── Config Loading ───────────────────────────────────────────────────────────
 
@@ -115,22 +107,13 @@ bool loadConfig(const char* path) {
 
   // Scan settings
   JsonObject scan = doc["scan"];
-  g_scan_config.window_ms        = scan["window_ms"] | 3000;
-  g_scan_config.interval_ms      = scan["interval_ms"] | 10000;
-  g_scan_config.rssi_threshold   = scan["rssi_threshold"] | -75;
+  g_scan_config.window_ms          = scan["window_ms"] | 3000;
+  g_scan_config.interval_ms        = scan["interval_ms"] | 10000;
+  g_scan_config.rssi_threshold     = scan["rssi_threshold"] | -75;
   g_scan_config.display_timeout_ms = scan["display_timeout_ms"] | 30000;
-  g_scan_config.lcd_on_ms        = scan["lcd_on_ms"] | 5000;
-  g_scan_config.lcd_brightness   = scan["lcd_brightness"] | 128;
+  g_scan_config.lcd_on_ms          = scan["lcd_on_ms"] | 5000;
+  g_scan_config.lcd_brightness     = scan["lcd_brightness"] | 128;
   g_scan_config.lcd_brightness_dim = scan["lcd_brightness_dim"] | 32;
-
-  // Confidence weights
-  JsonObject conf = doc["confidence"];
-  g_weights.manufacturer_id_match = conf["manufacturer_id_match"] | 40;
-  g_weights.service_uuid_match    = conf["service_uuid_match"] | 30;
-  g_weights.name_prefix_match     = conf["name_prefix_match"] | 20;
-  g_weights.adv_length_match      = conf["adv_length_match"] | 10;
-  g_weights.threshold_likely      = conf["threshold_likely"] | 70;
-  g_weights.threshold_possible    = conf["threshold_possible"] | 40;
 
   // Device signatures
   JsonArray devices = doc["devices"];
@@ -140,9 +123,9 @@ bool loadConfig(const char* path) {
     if (g_signature_count >= 16) break;
 
     DeviceSignature& sig = g_signatures[g_signature_count];
-    sig.id       = dev["id"] | "unknown";
-    sig.label    = dev["label"] | "Unknown";
-    sig.category = dev["category"] | "glasses";
+    sig.id         = dev["id"] | "unknown";
+    sig.label      = dev["label"] | "Unknown";
+    sig.has_camera = dev["has_camera"] | false;
 
     // Manufacturer IDs
     sig.mfr_id_count = 0;
@@ -152,12 +135,12 @@ bool loadConfig(const char* path) {
       sig.manufacturer_ids[sig.mfr_id_count++] = parseHex16(hex);
     }
 
-    // Service UUIDs
-    sig.svc_uuid_count = 0;
-    JsonArray svc_uuids = dev["service_uuids"];
-    for (const char* uuid : svc_uuids) {
-      if (sig.svc_uuid_count >= 4) break;
-      sig.service_uuids[sig.svc_uuid_count++] = uuid;
+    // Payload strings (e.g., "META_RB_GLASS")
+    sig.payload_str_count = 0;
+    JsonArray payloads = dev["payload_strings"];
+    for (const char* ps : payloads) {
+      if (sig.payload_str_count >= 4) break;
+      sig.payload_strings[sig.payload_str_count++] = ps;
     }
 
     // Name prefixes
@@ -168,11 +151,6 @@ bool loadConfig(const char* path) {
       sig.name_prefixes[sig.name_prefix_count++] = pfx;
     }
 
-    // Advertisement data length range
-    JsonArray adv_range = dev["adv_data_length_range"];
-    sig.adv_len_min = adv_range[0] | 0;
-    sig.adv_len_max = adv_range[1] | 0;
-
     g_signature_count++;
   }
 
@@ -182,53 +160,84 @@ bool loadConfig(const char* path) {
 
 // ── BLE Scanning ─────────────────────────────────────────────────────────────
 
-int scoreDetection(const NimBLEAdvertisedDevice* device, const DeviceSignature& sig) {
-  int score = 0;
+// Check if the manufacturer data payload contains a specific string.
+// The payload bytes start AFTER the 2-byte company ID.
+bool payloadContains(const std::string& mfr_data, const String& search) {
+  if (mfr_data.length() < 2 + search.length()) return false;
 
-  // Check manufacturer IDs
-  if (sig.mfr_id_count > 0 && device->haveManufacturerData()) {
-    std::string mfr_data = device->getManufacturerData();
-    if (mfr_data.length() >= 2) {
-      uint16_t detected_id = (uint16_t)mfr_data[0] | ((uint16_t)mfr_data[1] << 8);
-      for (uint8_t i = 0; i < sig.mfr_id_count; i++) {
-        if (detected_id == sig.manufacturer_ids[i]) {
-          score += g_weights.manufacturer_id_match;
-          break;
-        }
-      }
+  // Search in the data portion (after the 2-byte company ID)
+  const char* data_start = mfr_data.c_str() + 2;
+  size_t data_len = mfr_data.length() - 2;
+
+  // Simple substring search
+  const char* needle = search.c_str();
+  size_t needle_len = search.length();
+
+  for (size_t i = 0; i <= data_len - needle_len; i++) {
+    if (memcmp(data_start + i, needle, needle_len) == 0) {
+      return true;
     }
   }
+  return false;
+}
 
-  // Check service UUIDs
-  if (sig.svc_uuid_count > 0) {
-    for (uint8_t i = 0; i < sig.svc_uuid_count; i++) {
-      if (device->isAdvertisingService(NimBLEUUID(sig.service_uuids[i].c_str()))) {
-        score += g_weights.service_uuid_match;
+bool matchDevice(const NimBLEAdvertisedDevice* device, const DeviceSignature& sig) {
+  const bool has_matcher =
+    sig.mfr_id_count > 0 ||
+    sig.payload_str_count > 0 ||
+    sig.name_prefix_count > 0;
+  if (!has_matcher) return false;
+
+  std::string mfr_data;
+  const bool needs_mfr_data = sig.mfr_id_count > 0 || sig.payload_str_count > 0;
+  if (needs_mfr_data) {
+    if (!device->haveManufacturerData()) return false;
+    mfr_data = device->getManufacturerData();
+    if (mfr_data.length() < 2) return false;
+  }
+
+  // If manufacturer IDs are defined, one of them must match.
+  if (sig.mfr_id_count > 0) {
+    bool mfr_id_matched = false;
+    const uint16_t detected_id = (uint16_t)(uint8_t)mfr_data[0] | ((uint16_t)(uint8_t)mfr_data[1] << 8);
+
+    for (uint8_t i = 0; i < sig.mfr_id_count; i++) {
+      if (detected_id == sig.manufacturer_ids[i]) {
+        mfr_id_matched = true;
         break;
       }
     }
+
+    if (!mfr_id_matched) return false;
   }
 
-  // Check device name prefixes
-  if (sig.name_prefix_count > 0 && device->haveName()) {
-    String name = device->getName().c_str();
+  // If payload strings are defined, at least one must match in manufacturer data.
+  if (sig.payload_str_count > 0) {
+    bool payload_matched = false;
+    for (uint8_t i = 0; i < sig.payload_str_count; i++) {
+      if (payloadContains(mfr_data, sig.payload_strings[i])) {
+        payload_matched = true;
+        break;
+      }
+    }
+    if (!payload_matched) return false;
+  }
+
+  // If name prefixes are defined, at least one must match.
+  if (sig.name_prefix_count > 0) {
+    if (!device->haveName()) return false;
+    const String name = device->getName().c_str();
+    bool name_matched = false;
     for (uint8_t i = 0; i < sig.name_prefix_count; i++) {
       if (name.startsWith(sig.name_prefixes[i])) {
-        score += g_weights.name_prefix_match;
+        name_matched = true;
         break;
       }
     }
+    if (!name_matched) return false;
   }
 
-  // Check advertisement data length range
-  if (sig.adv_len_min > 0 && sig.adv_len_max > 0) {
-    size_t payload_len = device->getPayload().size();
-    if (payload_len >= sig.adv_len_min && payload_len <= sig.adv_len_max) {
-      score += g_weights.adv_length_match;
-    }
-  }
-
-  return score;
+  return true;
 }
 
 class ScanCallbacks : public NimBLEScanCallbacks {
@@ -237,20 +246,18 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     if (rssi < g_scan_config.rssi_threshold) return;
 
     for (uint8_t s = 0; s < g_signature_count; s++) {
-      int score = scoreDetection(device, g_signatures[s]);
-      if (score < g_weights.threshold_possible) continue;
+      if (!matchDevice(device, g_signatures[s])) continue;
 
       xSemaphoreTake(g_detection_mutex, portMAX_DELAY);
 
-      // Check if already detected (update if higher confidence)
+      // Check if already detected (update RSSI if stronger)
       bool found = false;
       for (uint8_t d = 0; d < g_detection_count; d++) {
         if (g_detections[d].label == g_signatures[s].label) {
-          if (score > g_detections[d].confidence || rssi > g_detections[d].rssi) {
-            g_detections[d].rssi       = rssi;
-            g_detections[d].confidence = score;
-            g_detections[d].timestamp  = millis();
+          if (rssi > g_detections[d].rssi) {
+            g_detections[d].rssi = rssi;
           }
+          g_detections[d].timestamp = millis();
           found = true;
           break;
         }
@@ -259,18 +266,17 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       // Add new detection
       if (!found && g_detection_count < 8) {
         g_detections[g_detection_count].label      = g_signatures[s].label;
-        g_detections[g_detection_count].category   = g_signatures[s].category;
-        g_detections[g_detection_count].rssi       = rssi;
-        g_detections[g_detection_count].confidence = score;
-        g_detections[g_detection_count].timestamp  = millis();
+        g_detections[g_detection_count].has_camera  = g_signatures[s].has_camera;
+        g_detections[g_detection_count].rssi        = rssi;
+        g_detections[g_detection_count].timestamp   = millis();
         g_detection_count++;
+        g_new_detection_flag = true;
       }
 
       g_last_detection_time = millis();
-      g_new_detection_flag = true;
 
       xSemaphoreGive(g_detection_mutex);
-      break; // matched a signature, move to next device
+      break;
     }
   }
 
@@ -287,7 +293,6 @@ void startScan() {
   uint32_t now = millis();
   for (int i = g_detection_count - 1; i >= 0; i--) {
     if (now - g_detections[i].timestamp > g_scan_config.display_timeout_ms) {
-      // Shift remaining detections down
       for (int j = i; j < g_detection_count - 1; j++) {
         g_detections[j] = g_detections[j + 1];
       }
@@ -297,7 +302,7 @@ void startScan() {
   xSemaphoreGive(g_detection_mutex);
 
   NimBLEScan* scan = NimBLEDevice::getScan();
-  scan->setActiveScan(false);  // passive scan - don't send scan requests
+  scan->setActiveScan(false);  // passive - don't send scan requests
   scan->setDuplicateFilter(true);
   scan->setScanCallbacks(&g_scan_callbacks, false);
   scan->start(g_scan_config.window_ms / 1000, false);
@@ -312,7 +317,6 @@ void lcdWake() {
     M5.Lcd.wakeup();
     M5.Lcd.setBrightness(g_scan_config.lcd_brightness);
     g_lcd_on = true;
-    Serial.println("LCD wake");
   }
   g_lcd_wake_time = millis();
 }
@@ -322,31 +326,22 @@ void lcdSleep() {
     M5.Lcd.setBrightness(0);
     M5.Lcd.sleep();
     g_lcd_on = false;
-    Serial.println("LCD sleep");
   }
 }
 
 void enterLightSleep(uint32_t sleep_ms) {
-  // LCD off before sleeping
   lcdSleep();
 
-  // Configure timer wakeup
   esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
-
-  // Configure GPIO wakeup for Button A (active low)
-  // StickS3 BtnA is GPIO37 on M5Unified — verify pin for your board revision
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_37, 0);  // wake on LOW
+  // StickS3 BtnA — verify GPIO pin against your board revision
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_37, 0);
 
   Serial.printf("Light sleep %lums\n", sleep_ms);
   Serial.flush();
 
   esp_light_sleep_start();
 
-  // ── We wake up here ──
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  Serial.printf("Woke up, cause: %d\n", cause);
-
-  // If woken by button, turn on LCD
   if (cause == ESP_SLEEP_WAKEUP_EXT0) {
     lcdWake();
   }
@@ -360,7 +355,6 @@ void drawStatusBar() {
   M5.Lcd.setCursor(4, 2);
   M5.Lcd.printf("Scan #%lu  RSSI>%d", g_scan_count, g_scan_config.rssi_threshold);
 
-  // Battery level on right side
   int batt = M5.Power.getBatteryLevel();
   M5.Lcd.setCursor(M5.Lcd.width() - 48, 2);
   M5.Lcd.printf("BAT:%d%%", batt);
@@ -370,7 +364,6 @@ void drawClearScreen() {
   M5.Lcd.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  // Draw "CLEAR" indicator
   int cx = M5.Lcd.width() / 2;
   int cy = M5.Lcd.height() / 2 - 10;
 
@@ -386,7 +379,6 @@ void drawClearScreen() {
   M5.Lcd.setCursor(cx - 48, cy + 34);
   M5.Lcd.print("No glasses found");
 
-  // Scanning indicator
   if (g_scanning) {
     M5.Lcd.setCursor(cx - 30, M5.Lcd.height() - 14);
     M5.Lcd.setTextColor(COLOR_DIM, COLOR_BG);
@@ -405,20 +397,8 @@ void drawDetectionScreen() {
   for (uint8_t i = 0; i < g_detection_count && i < 4; i++) {
     Detection& det = g_detections[i];
 
-    // Choose color based on confidence and category
-    uint16_t color;
-    const char* level;
-
-    if (det.category == "meta_ambiguous") {
-      color = COLOR_AMBIGUOUS;
-      level = "MAYBE";
-    } else if (det.confidence >= g_weights.threshold_likely) {
-      color = COLOR_LIKELY;
-      level = "LIKELY";
-    } else {
-      color = COLOR_POSSIBLE;
-      level = "POSS";
-    }
+    // Red for camera-equipped glasses, amber for non-camera
+    uint16_t color = det.has_camera ? COLOR_CAMERA : COLOR_NOCAM;
 
     // Alert indicator bar
     M5.Lcd.fillRect(0, y, 4, 26, color);
@@ -429,17 +409,16 @@ void drawDetectionScreen() {
     M5.Lcd.setCursor(8, y + 2);
     M5.Lcd.print(det.label);
 
-    // Confidence and RSSI
+    // RSSI and camera indicator
     M5.Lcd.setTextColor(COLOR_DIM, COLOR_BG);
     M5.Lcd.setCursor(8, y + 15);
-    M5.Lcd.printf("%s %d%%  %ddBm", level, det.confidence, det.rssi);
+    M5.Lcd.printf("%ddBm  %s", det.rssi, det.has_camera ? "CAM" : "NO CAM");
 
     y += 30;
   }
 
   xSemaphoreGive(g_detection_mutex);
 
-  // Scanning indicator at bottom
   if (g_scanning) {
     M5.Lcd.setCursor(M5.Lcd.width() / 2 - 30, M5.Lcd.height() - 14);
     M5.Lcd.setTextColor(COLOR_DIM, COLOR_BG);
@@ -460,53 +439,41 @@ void setup() {
   M5.begin(cfg);
 
   Serial.begin(115200);
-  Serial.println("GlassesDetector starting...");
+  Serial.println("Spectacle starting...");
 
-  M5.Lcd.setRotation(1);  // landscape on StickS3
+  M5.Lcd.setRotation(1);
   M5.Lcd.fillScreen(COLOR_BG);
   M5.Lcd.setTextColor(COLOR_TEXT, COLOR_BG);
   M5.Lcd.setTextSize(1);
   M5.Lcd.setCursor(4, 4);
-  M5.Lcd.println("GlassesDetector v0.1");
+  M5.Lcd.println("Spectacle v0.1");
   M5.Lcd.println("Loading config...");
 
-  // Init SPIFFS
   if (!SPIFFS.begin(true)) {
     M5.Lcd.println("SPIFFS FAILED");
-    Serial.println("SPIFFS mount failed");
     while (1) delay(1000);
   }
 
-  // Load config
   if (!loadConfig("/config.json")) {
     M5.Lcd.println("CONFIG FAILED");
     M5.Lcd.println("Check /config.json");
-    Serial.println("Config load failed");
     while (1) delay(1000);
   }
 
   M5.Lcd.printf("Loaded %d sigs\n", g_signature_count);
   M5.Lcd.printf("RSSI thresh: %d\n", g_scan_config.rssi_threshold);
 
-  // Init mutex
   g_detection_mutex = xSemaphoreCreateMutex();
 
-  // Init BLE
-  NimBLEDevice::init(""); // no device name - we're just scanning
+  NimBLEDevice::init("");
   M5.Lcd.println("BLE initialized");
 
-  // Speaker setup
   M5.Speaker.setVolume(64);
-
-  // LCD initial brightness
   M5.Lcd.setBrightness(g_scan_config.lcd_brightness);
   g_lcd_wake_time = millis();
 
   delay(1500);
-
   Serial.println("Setup complete, starting scan loop");
-
-  // Do an initial scan immediately
   startScan();
 }
 
@@ -517,30 +484,27 @@ void loop() {
   static bool     needs_redraw = true;
   uint32_t now = millis();
 
-  // ── Handle new detections (flag set from BLE callback) ───────────────────
+  // ── Handle new detections ─────────────────────────────────────────────────
   if (g_new_detection_flag) {
     g_new_detection_flag = false;
     lcdWake();
-    alertBuzz();
     needs_redraw = true;
   }
 
-  // ── LCD auto-off timer ───────────────────────────────────────────────────
+  // ── LCD auto-off ──────────────────────────────────────────────────────────
   if (g_lcd_on && (now - g_lcd_wake_time >= g_scan_config.lcd_on_ms)) {
-    // Dim briefly before turning off
     M5.Lcd.setBrightness(g_scan_config.lcd_brightness_dim);
     delay(500);
     lcdSleep();
   }
 
-  // ── Check if detection count changed (expiry) ───────────────────────────
+  // ── Detection count changes (expiry) ──────────────────────────────────────
   xSemaphoreTake(g_detection_mutex, portMAX_DELAY);
   uint8_t current_count = g_detection_count;
   xSemaphoreGive(g_detection_mutex);
 
   if (current_count != prev_detection_count) {
-    if (current_count > prev_detection_count && !g_new_detection_flag) {
-      // Edge case: count increased but flag was already cleared
+    if (current_count > prev_detection_count) {
       lcdWake();
       alertBuzz();
     }
@@ -548,7 +512,7 @@ void loop() {
     needs_redraw = true;
   }
 
-  // ── Redraw display (only if LCD is on) ──────────────────────────────────
+  // ── Redraw ────────────────────────────────────────────────────────────────
   if (needs_redraw && g_lcd_on) {
     if (current_count == 0) {
       drawClearScreen();
@@ -558,7 +522,7 @@ void loop() {
     needs_redraw = false;
   }
 
-  // ── Button A: force rescan + wake LCD ───────────────────────────────────
+  // ── Button A: force rescan + wake LCD ─────────────────────────────────────
   if (M5.BtnA.wasPressed()) {
     lcdWake();
     if (!g_scanning) {
@@ -567,7 +531,7 @@ void loop() {
     }
   }
 
-  // ── Button B: cycle RSSI threshold ──────────────────────────────────────
+  // ── Button B: cycle RSSI threshold ────────────────────────────────────────
   if (M5.BtnB.wasPressed()) {
     lcdWake();
     g_scan_config.rssi_threshold -= 10;
@@ -578,22 +542,16 @@ void loop() {
     needs_redraw = true;
   }
 
-  // ── Sleep between scans ─────────────────────────────────────────────────
-  // If not currently scanning and LCD is off, enter light sleep until
-  // the next scan window. If LCD is on, just idle with short delays
-  // so the display stays responsive to buttons.
+  // ── Sleep between scans ───────────────────────────────────────────────────
   if (!g_scanning) {
     if (!g_lcd_on) {
-      // Calculate remaining time until next scan
       uint32_t sleep_time = g_scan_config.interval_ms - g_scan_config.window_ms;
       if (sleep_time > 100) {
         enterLightSleep(sleep_time);
-        // After waking, immediately start the next scan
         startScan();
         needs_redraw = true;
       }
     } else {
-      // LCD is on — stay awake for button responsiveness but start scan on schedule
       static uint32_t last_scan_end = 0;
       if (now - last_scan_end >= g_scan_config.interval_ms) {
         startScan();
@@ -603,6 +561,6 @@ void loop() {
       delay(50);
     }
   } else {
-    delay(50);  // polling during active scan
+    delay(50);
   }
 }

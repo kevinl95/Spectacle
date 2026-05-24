@@ -11,14 +11,13 @@ A passive BLE smart glasses detector for the M5Stack StickS3. Scans for Bluetoot
 
 ## How it works
 
-The detector passively listens for BLE advertising packets and matches them against a configurable database of known smart glasses signatures. Instead of simple manufacturer ID matching (which causes false positives with VR headsets), it uses a **confidence scoring system** that combines:
+The detector passively listens for BLE advertising packets and matches them against a configurable database of known smart glasses signatures. Instead of relying on manufacturer ID alone, each signature can define one or more of these checks:
 
-- Manufacturer ID (e.g., Luxottica `0x0D53` = strong glasses indicator)
-- Service UUIDs
+- Manufacturer ID
+- Manufacturer data payload strings
 - Device name prefixes
-- Advertisement payload length characteristics
 
-Each match component contributes a weighted score. Detections are classified as **LIKELY**, **POSSIBLE**, or **MAYBE** (for ambiguous manufacturers like generic Meta IDs that could be Ray-Bans or Quest headsets).
+All defined checks for a signature must pass. Undefined checks are skipped. This lets the detector stay strict for ambiguous vendors like Meta by requiring payload strings such as `META_RB_GLASS`, while still allowing name-prefix-based matching for devices whose company ID is not yet known.
 
 ## Hardware
 
@@ -39,7 +38,7 @@ pio run -t uploadfs
 
 If `pio` is not on your `PATH`, use `python3 -m platformio run -t uploadfs`.
 
-Scan timing, confidence weights, and RSSI thresholds are also defined in `generate_config.py` in the `generate_config()` function.
+Scan timing, display behavior, and RSSI thresholds are also defined in `generate_config.py` in the `generate_config()` function.
 
 ## Building
 
@@ -97,10 +96,8 @@ Add an entry to the `GLASSES_MANUFACTURERS` list in `generate_config.py`:
     "search_names": ["new company"],          # substring match against Nordic DB
     "device_id": "new_glasses",
     "label": "Brand Name",                    # shown on the StickS3 screen
-    "category": "glasses",
     "name_prefixes": ["BrandName"],           # BLE device name prefixes
-    "service_uuids": [],                       # from nRF Connect scan
-    "adv_data_length_range": [0, 0],          # from nRF Connect scan
+    "payload_strings": ["BRAND_MARKER"],      # ASCII marker in manufacturer data, if present
     "notes": "Description",
     "has_camera": True,
 }
@@ -108,16 +105,16 @@ Add an entry to the `GLASSES_MANUFACTURERS` list in `generate_config.py`:
 
 Then run `python3 generate_config.py` to regenerate `data/config.json`.
 
-Set `category` to `"glasses"` for confirmed smart glasses, `"glasses_and_other"` for companies that also make non-glasses BLE devices (requires `name_prefixes` to avoid false positives), or `"meta_ambiguous"` for IDs shared across product lines. The display uses category to choose alert colors.
+`search_names` is used to resolve Bluetooth company IDs from the Nordic database. If a vendor ID is ambiguous, add a `payload_strings` marker or `name_prefixes` guard so the firmware requires those checks too. If the vendor is not in the Nordic database yet, name-prefix-only matching is still possible.
 
 ## Research needed
 
-The `adv_data_length_range` and `service_uuids` fields are mostly empty — they need to be populated by sniffing actual devices. If you have access to any of these glasses, run an nRF Connect scan and note:
+The strongest detections come from real manufacturer data payloads and stable device-name prefixes. If you have access to any of these glasses, run an nRF Connect scan and note:
 
-- Full advertisement payload hex dump
-- Service UUIDs advertised
-- Payload length
-- Advertisement interval timing
+- Company ID
+- BLE device name
+- Manufacturer data payload hex dump
+- Any readable ASCII marker inside the manufacturer payload
 
 PRs with real-world scan data welcome — update the relevant entry in `generate_config.py` (not `data/config.json`).
 
