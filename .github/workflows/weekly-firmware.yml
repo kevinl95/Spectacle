@@ -86,6 +86,9 @@ jobs:
       - name: Build SPIFFS image
         run: python -m platformio run -t buildfs
 
+      - name: Generate PlatformIO IDE metadata
+        run: python -m platformio run -t idedata
+
       - name: Verify packaging inputs
         shell: bash
         run: |
@@ -109,6 +112,7 @@ jobs:
             printf '  %s\n' "${missing[@]}"
             python -m platformio run
             python -m platformio run -t buildfs
+            python -m platformio run -t idedata
           fi
 
           for path in "${expected[@]}"; do
