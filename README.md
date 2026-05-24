@@ -42,7 +42,30 @@ If `pio` is not on your `PATH`, use `python3 -m platformio run -t uploadfs`.
 
 Scan timing, display behavior, and RSSI thresholds are also defined in `generate_config.py` in the `generate_config()` function.
 
-## Building
+## Flashing
+
+### Entering download mode
+
+The StickS3 uses the ESP32-S3's native USB rather than a separate UART bridge chip. To flash firmware, put the device into download mode:
+
+1. Connect the StickS3 to your computer via USB-C with a data-capable cable.
+2. Press and hold the reset button on the side of the device for about 2 seconds.
+3. When the internal green LED blinks, release the button. The device is now in download mode.
+
+If you enter download mode accidentally and want to return to normal operation without flashing, press the reset button briefly.
+
+### Windows USB troubleshooting
+
+The ESP32-S3's native USB can be finicky on Windows. If Windows shows `USB device not recognized` when the StickS3 is in download mode:
+
+- Try a different USB port. USB 2.0 ports tend to work more reliably than USB 3.0 ports for ESP32-S3 native USB enumeration.
+- Check Device Manager. Look under `Other devices` for anything with a yellow triangle. Try `Update driver` and select `USB Serial Device` or `USB JTAG/serial debug unit` from the built-in list.
+- Try [Zadig](https://zadig.akeo.org) and assign the `WinUSB` driver to the ESP32-S3 device while it is in download mode.
+- Try M5Stack's [M5Burner](https://docs.m5stack.com/en/download) tool if you need a known-good recovery path or factory restore.
+
+The device cannot be permanently bricked by a bad flash here because the ESP32-S3 ROM bootloader remains available.
+
+### Build and upload
 
 ```bash
 # Build
@@ -83,6 +106,8 @@ The browser updater lives in `docs/` and is intended for existing StickS3 device
 - **Factory reflash** performs a full erase and then restores bootloader, partition table, application, and SPIFFS.
 
 Do not full-erase the device for a normal update unless you are also restoring the bootloader and partition table. Erasing the whole chip and then flashing only the app plus SPIFFS will leave the device unbootable.
+
+The web flasher requires Chrome or Edge for the Web Serial API. The same USB troubleshooting steps above still apply here. If the StickS3 shows up as `USB device not recognized`, try a USB 2.0 port first and confirm the device is actually in download mode before retrying.
 
 ## Controls
 
