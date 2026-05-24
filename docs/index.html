@@ -22,7 +22,7 @@
         <div class="eyebrow">Spectacle / Browser Updater</div>
         <h1>Flash the weekly smart-glasses detector build without leaving the browser.</h1>
         <p class="lede">
-          Routine updates write only the application image and the SPIFFS config image.
+          Routine updates write only the application image and the SPIFFS config image on devices already running Spectacle.
           Full erase is reserved for recovery, because it also wipes the bootloader and partition table.
         </p>
         <div class="hero-strip">
@@ -68,7 +68,7 @@
           <div class="section-tag">Update Flow</div>
           <h2>Routine update</h2>
           <p class="panel-copy" id="updateNote">
-            Connect the StickS3 over USB, enter the bootloader when prompted, then flash the app and SPIFFS images.
+            Use this only on devices already provisioned with Spectacle. It flashes the app and SPIFFS images, but it does not repair the partition table.
           </p>
           <div class="button-row">
             <button id="connectButton" class="primary" type="button">Connect Device</button>
@@ -78,7 +78,7 @@
             <button id="flashButton" class="accent" type="button">Flash Update</button>
           </div>
           <p class="helper">
-            Use Chrome or Edge on desktop with a data-capable USB cable. The default path does not erase the entire chip.
+            Use Chrome or Edge on desktop with a data-capable USB cable. If the device is fresh, fully erased, or boots with SPIFFS FAILED, use factory reflash instead.
           </p>
         </article>
       </section>
@@ -119,10 +119,10 @@
           <div class="section-tag">Recovery Only</div>
           <h2>Factory reflash</h2>
           <p class="panel-copy" id="recoveryNote">
-            Full erase is not required for normal updates. Use factory reflash only when the device is corrupted or the flash layout needs repair.
+            Use this for first install, after a full erase, or when the device is corrupted, the flash layout needs repair, or the boot screen shows SPIFFS FAILED.
           </p>
           <div class="button-row">
-            <button id="factoryFlashButton" class="danger" type="button">Factory Reflash</button>
+            <button id="factoryFlashButton" class="danger" type="button">Factory Reflash / Repair</button>
           </div>
           <p class="helper">
             This path erases the entire chip and then restores the bootloader, partition table, application, and SPIFFS images.

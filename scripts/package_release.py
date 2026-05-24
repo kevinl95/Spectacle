@@ -255,11 +255,11 @@ def main() -> None:
         },
         "update": {
             "eraseAll": False,
-            "note": "Routine updates flash the application and SPIFFS images only.",
+            "note": "Routine updates flash only the application and SPIFFS images. Use them only on devices already provisioned with Spectacle's partition table.",
         },
         "recovery": {
             "eraseAll": True,
-            "note": "Factory reflash erases the whole chip and then restores bootloader, partition table, application, and SPIFFS.",
+            "note": "Factory reflash erases the whole chip and then restores bootloader, partition table, application, and SPIFFS. Use this for first install, after a full erase, or if the device boots with SPIFFS FAILED.",
         },
         "images": images,
         "metadata": metadata,

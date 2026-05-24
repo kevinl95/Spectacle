@@ -105,6 +105,8 @@ The browser updater lives in `docs/` and is intended for existing StickS3 device
 - **Routine update** flashes only the application image and the SPIFFS config image.
 - **Factory reflash** performs a full erase and then restores bootloader, partition table, application, and SPIFFS.
 
+Routine update is only for devices that already have Spectacle's flash layout in place. If the device is fresh, has been fully erased, or boots with `SPIFFS FAILED`, use factory reflash instead.
+
 Do not full-erase the device for a normal update unless you are also restoring the bootloader and partition table. Erasing the whole chip and then flashing only the app plus SPIFFS will leave the device unbootable.
 
 The web flasher requires Chrome or Edge for the Web Serial API. The same USB troubleshooting steps above still apply here. If the StickS3 shows up as `USB device not recognized`, try a USB 2.0 port first and confirm the device is actually in download mode before retrying.

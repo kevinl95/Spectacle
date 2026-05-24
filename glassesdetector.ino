@@ -451,12 +451,17 @@ void setup() {
 
   if (!SPIFFS.begin(true)) {
     M5.Lcd.println("SPIFFS FAILED");
+    M5.Lcd.println("Use factory");
+    M5.Lcd.println("reflash");
+    Serial.println("SPIFFS mount failed. Reflash bootloader, partitions, firmware, and SPIFFS.");
     while (1) delay(1000);
   }
 
   if (!loadConfig("/config.json")) {
     M5.Lcd.println("CONFIG FAILED");
-    M5.Lcd.println("Check /config.json");
+    M5.Lcd.println("Flash SPIFFS or");
+    M5.Lcd.println("factory reflash");
+    Serial.println("Config load failed. Flash the SPIFFS image or run a full factory reflash.");
     while (1) delay(1000);
   }
 
