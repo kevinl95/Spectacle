@@ -76,6 +76,8 @@ static uint32_t          g_lcd_wake_time = 0;
 static bool              g_new_detection_flag = false;
 static int               g_battery_level = -1;
 static int               g_battery_voltage_mv = 0;
+static int               g_battery_filtered_mv = 0;
+static int8_t            g_battery_charge_state = -1;
 static uint32_t          g_last_battery_sample_time = 0;
 static uint32_t          g_next_battery_sample_at = 0;
 
@@ -91,6 +93,9 @@ static const uint8_t  BATTERY_SAMPLE_COUNT = 4;
 static const uint32_t BATTERY_SAMPLE_DELAY_MS = 20;
 static const uint32_t BATTERY_SAMPLE_INTERVAL_MS = 5000;
 static const uint32_t BATTERY_WAKE_SETTLE_MS = 250;
+static const uint8_t  BATTERY_FILTER_SHIFT = 3;
+static const uint8_t  BATTERY_LEVEL_HYSTERESIS = 2;
+static const uint8_t  BATTERY_LEVEL_REBOUND_HYSTERESIS = 4;
 
 static const gpio_num_t STICKS3_BTN_A_GPIO = GPIO_NUM_11;
 static const gpio_num_t STICKS3_BTN_B_GPIO = GPIO_NUM_12;
@@ -169,10 +174,70 @@ bool consumePm1ButtonEvent() {
 }
 
 int batteryLevelFromMillivolts(int battery_mv) {
-  int level = (battery_mv - 3300) * 100 / (4150 - 3350);
-  if (level < 0) return 0;
-  if (level > 100) return 100;
-  return level;
+  struct BatteryCurvePoint {
+    int millivolts;
+    int percent;
+  };
+
+  static const BatteryCurvePoint curve[] = {
+    {4200, 100},
+    {4160, 95},
+    {4120, 90},
+    {4080, 80},
+    {4010, 70},
+    {3970, 60},
+    {3920, 50},
+    {3870, 40},
+    {3830, 30},
+    {3790, 20},
+    {3750, 12},
+    {3700, 6},
+    {3600, 2},
+    {3300, 0},
+  };
+
+  if (battery_mv >= curve[0].millivolts) {
+    return curve[0].percent;
+  }
+
+  for (size_t i = 1; i < sizeof(curve) / sizeof(curve[0]); i++) {
+    if (battery_mv >= curve[i].millivolts) {
+      const BatteryCurvePoint& upper = curve[i - 1];
+      const BatteryCurvePoint& lower = curve[i];
+      int span_mv = upper.millivolts - lower.millivolts;
+      if (span_mv <= 0) {
+        return lower.percent;
+      }
+
+      int offset_mv = battery_mv - lower.millivolts;
+      return lower.percent + (offset_mv * (upper.percent - lower.percent)) / span_mv;
+    }
+  }
+
+  return 0;
+}
+
+void updateDisplayedBatteryLevel(int estimated_level, int charge_state) {
+  if (g_battery_level < 0) {
+    g_battery_level = estimated_level;
+    return;
+  }
+
+  int diff = estimated_level - g_battery_level;
+  if (diff == 0) {
+    return;
+  }
+
+  int threshold = BATTERY_LEVEL_HYSTERESIS;
+  if ((charge_state == 0 && diff > 0) || (charge_state == 1 && diff < 0)) {
+    threshold = BATTERY_LEVEL_REBOUND_HYSTERESIS;
+  }
+
+  if (abs(diff) < threshold) {
+    return;
+  }
+
+  g_battery_level += (diff > 0) ? 1 : -1;
 }
 
 void refreshBatteryStatus(bool force = false) {
@@ -206,8 +271,19 @@ void refreshBatteryStatus(bool force = false) {
   }
 
   if (valid_samples > 0) {
-    g_battery_voltage_mv = total_mv / valid_samples;
-    g_battery_level = batteryLevelFromMillivolts(g_battery_voltage_mv);
+    int average_mv = total_mv / valid_samples;
+    int charge_state = (int)M5.Power.isCharging();
+
+    if (g_battery_filtered_mv <= 0 || force) {
+      g_battery_filtered_mv = average_mv;
+    } else {
+      g_battery_filtered_mv =
+        (g_battery_filtered_mv * ((1 << BATTERY_FILTER_SHIFT) - 1) + average_mv) >> BATTERY_FILTER_SHIFT;
+    }
+
+    g_battery_voltage_mv = g_battery_filtered_mv;
+    g_battery_charge_state = charge_state;
+    updateDisplayedBatteryLevel(batteryLevelFromMillivolts(g_battery_filtered_mv), charge_state);
   } else {
     g_battery_level = M5.Power.getBatteryLevel();
   }
