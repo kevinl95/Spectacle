@@ -74,6 +74,10 @@ static uint32_t          g_scan_count = 0;
 static bool              g_lcd_on = true;
 static uint32_t          g_lcd_wake_time = 0;
 static bool              g_new_detection_flag = false;
+static int               g_battery_level = -1;
+static int               g_battery_voltage_mv = 0;
+static uint32_t          g_last_battery_sample_time = 0;
+static uint32_t          g_next_battery_sample_at = 0;
 
 // ── Display Constants ────────────────────────────────────────────────────────
 
@@ -83,6 +87,10 @@ static const uint16_t COLOR_CAMERA   = 0xF800;  // red - has camera
 static const uint16_t COLOR_NOCAM    = 0xFDA0;  // amber - no camera
 static const uint16_t COLOR_TEXT     = TFT_WHITE;
 static const uint16_t COLOR_DIM      = 0x7BEF;  // gray
+static const uint8_t  BATTERY_SAMPLE_COUNT = 4;
+static const uint32_t BATTERY_SAMPLE_DELAY_MS = 20;
+static const uint32_t BATTERY_SAMPLE_INTERVAL_MS = 5000;
+static const uint32_t BATTERY_WAKE_SETTLE_MS = 250;
 
 static const gpio_num_t STICKS3_BTN_A_GPIO = GPIO_NUM_11;
 static const gpio_num_t STICKS3_BTN_B_GPIO = GPIO_NUM_12;
@@ -158,6 +166,53 @@ bool consumePm1ButtonEvent() {
   g_pm1.irqClearGpioAll();
   g_pm1.irqClearSysAll();
   return handled;
+}
+
+int batteryLevelFromMillivolts(int battery_mv) {
+  int level = (battery_mv - 3300) * 100 / (4150 - 3350);
+  if (level < 0) return 0;
+  if (level > 100) return 100;
+  return level;
+}
+
+void refreshBatteryStatus(bool force = false) {
+  uint32_t now = millis();
+
+  if (!force) {
+    if (!g_lcd_on) {
+      return;
+    }
+    if ((int32_t)(now - g_next_battery_sample_at) < 0) {
+      return;
+    }
+    if (now - g_last_battery_sample_time < BATTERY_SAMPLE_INTERVAL_MS) {
+      return;
+    }
+  }
+
+  int32_t total_mv = 0;
+  uint8_t valid_samples = 0;
+
+  for (uint8_t i = 0; i < BATTERY_SAMPLE_COUNT; i++) {
+    int sample_mv = M5.Power.getBatteryVoltage();
+    if (sample_mv > 0) {
+      total_mv += sample_mv;
+      valid_samples++;
+    }
+
+    if (i + 1 < BATTERY_SAMPLE_COUNT) {
+      delay(BATTERY_SAMPLE_DELAY_MS);
+    }
+  }
+
+  if (valid_samples > 0) {
+    g_battery_voltage_mv = total_mv / valid_samples;
+    g_battery_level = batteryLevelFromMillivolts(g_battery_voltage_mv);
+  } else {
+    g_battery_level = M5.Power.getBatteryLevel();
+  }
+
+  g_last_battery_sample_time = millis();
 }
 
 // ── Config Loading ───────────────────────────────────────────────────────────
@@ -397,6 +452,7 @@ void lcdWake() {
     g_lcd_on = true;
   }
   g_lcd_wake_time = millis();
+  g_next_battery_sample_at = g_lcd_wake_time + BATTERY_WAKE_SETTLE_MS;
 }
 
 void lcdSleep() {
@@ -443,7 +499,10 @@ void drawStatusBar() {
   M5.Lcd.setCursor(4, 2);
   M5.Lcd.printf("Scan #%lu  RSSI>%d", g_scan_count, g_scan_config.rssi_threshold);
 
-  int batt = M5.Power.getBatteryLevel();
+  int batt = g_battery_level;
+  if (batt < 0) {
+    batt = M5.Power.getBatteryLevel();
+  }
   M5.Lcd.setCursor(M5.Lcd.width() - 48, 2);
   M5.Lcd.printf("BAT:%d%%", batt);
 }
@@ -568,6 +627,8 @@ void setup() {
   M5.Speaker.setVolume(64);
   M5.Lcd.setBrightness(g_scan_config.lcd_brightness);
   g_lcd_wake_time = millis();
+  g_next_battery_sample_at = g_lcd_wake_time + BATTERY_WAKE_SETTLE_MS;
+  refreshBatteryStatus(true);
 
   delay(1500);
   Serial.println("Setup complete, starting scan loop");
@@ -580,6 +641,8 @@ void loop() {
   static uint8_t  prev_detection_count = 0;
   static bool     needs_redraw = true;
   uint32_t now = millis();
+
+  refreshBatteryStatus();
 
   if (consumePm1ButtonEvent()) {
     lcdWake();
