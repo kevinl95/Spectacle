@@ -1,4 +1,4 @@
-# GlassesDetector
+# Spectacle - Smart Glasses Detecting Keychain
 
 A passive BLE smart glasses detector for the M5Stack StickS3. Scans for Bluetooth Low Energy advertisements from known smart glasses (Meta Ray-Ban, Snap Spectacles, etc.) and alerts you when they're nearby.
 
