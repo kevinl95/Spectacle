@@ -17,6 +17,7 @@
  */
 
 #include <M5Unified.h>
+#include <M5PM1.h>
 #include <NimBLEDevice.h>
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
@@ -85,6 +86,79 @@ static const uint16_t COLOR_DIM      = 0x7BEF;  // gray
 
 static const gpio_num_t STICKS3_BTN_A_GPIO = GPIO_NUM_11;
 static const gpio_num_t STICKS3_BTN_B_GPIO = GPIO_NUM_12;
+static const gpio_num_t STICKS3_PM1_IRQ_GPIO = GPIO_NUM_13;
+
+static M5PM1            g_pm1;
+static bool             g_pm1_ready = false;
+
+bool pm1CallOk(m5pm1_err_t err, const char* op) {
+  if (err == M5PM1_OK) {
+    return true;
+  }
+
+  Serial.printf("PM1 %s failed: %d\n", op, err);
+  return false;
+}
+
+bool initPm1ButtonWake() {
+  pinMode(STICKS3_PM1_IRQ_GPIO, INPUT_PULLUP);
+
+  if (!pm1CallOk(g_pm1.begin(&M5.In_I2C, M5PM1_DEFAULT_ADDR, M5PM1_I2C_FREQ_100K), "begin")) {
+    return false;
+  }
+
+  g_pm1.setAutoWakeEnable(true);
+
+  uint8_t wake_src = 0;
+  if (g_pm1.getWakeSource(&wake_src, M5PM1_CLEAN_ALL) == M5PM1_OK && wake_src != 0) {
+    Serial.printf("PM1 wake source: 0x%02X\n", wake_src);
+  }
+
+  bool ok = true;
+  ok &= pm1CallOk(g_pm1.irqClearGpioAll(), "irqClearGpioAll");
+  ok &= pm1CallOk(g_pm1.irqClearSysAll(), "irqClearSysAll");
+  ok &= pm1CallOk(g_pm1.irqClearBtnAll(), "irqClearBtnAll");
+  ok &= pm1CallOk(g_pm1.irqSetGpioMaskAll(M5PM1_IRQ_MASK_ENABLE), "irqSetGpioMaskAll");
+  ok &= pm1CallOk(g_pm1.irqSetSysMaskAll(M5PM1_IRQ_MASK_ENABLE), "irqSetSysMaskAll");
+  ok &= pm1CallOk(g_pm1.irqSetBtnMaskAll(M5PM1_IRQ_MASK_ENABLE), "irqSetBtnMaskAll");
+  ok &= pm1CallOk(g_pm1.irqSetBtnMask(M5PM1_IRQ_BTN_CLICK, M5PM1_IRQ_MASK_DISABLE), "irqSetBtnMask(click)");
+  ok &= pm1CallOk(g_pm1.irqSetBtnMask(M5PM1_IRQ_BTN_WAKE, M5PM1_IRQ_MASK_DISABLE), "irqSetBtnMask(wake)");
+  ok &= pm1CallOk(g_pm1.setSingleResetDisable(true), "setSingleResetDisable");
+  ok &= pm1CallOk(g_pm1.gpioSetMode(M5PM1_GPIO_NUM_1, M5PM1_GPIO_MODE_OUTPUT), "gpioSetMode(GPIO1)");
+  ok &= pm1CallOk(g_pm1.gpioSetDrive(M5PM1_GPIO_NUM_1, M5PM1_GPIO_DRIVE_PUSHPULL), "gpioSetDrive(GPIO1)");
+  ok &= pm1CallOk(g_pm1.gpioSetFunc(M5PM1_GPIO_NUM_1, M5PM1_GPIO_FUNC_IRQ), "gpioSetFunc(GPIO1)");
+
+  if (ok) {
+    Serial.println("PM1 front-button IRQ routed to ESP32 GPIO13");
+  }
+
+  g_pm1_ready = ok;
+  return ok;
+}
+
+bool consumePm1ButtonEvent() {
+  if (!g_pm1_ready || digitalRead(STICKS3_PM1_IRQ_GPIO) != LOW) {
+    return false;
+  }
+
+  bool handled = false;
+  uint8_t btn_irq = 0;
+  if (g_pm1.irqGetBtnStatus(&btn_irq, M5PM1_CLEAN_ALL) == M5PM1_OK && btn_irq != M5PM1_IRQ_BTN_NONE) {
+    Serial.printf("PM1 button IRQ: 0x%02X\n", btn_irq);
+    handled = true;
+  }
+
+  uint8_t wake_src = 0;
+  if (g_pm1.getWakeSource(&wake_src, M5PM1_CLEAN_ALL) == M5PM1_OK && (wake_src & M5PM1_WAKE_SRC_PWRBTN)) {
+    Serial.println("PM1 power button wake");
+    handled = true;
+  }
+
+  g_pm1.irqClearBtnAll();
+  g_pm1.irqClearGpioAll();
+  g_pm1.irqClearSysAll();
+  return handled;
+}
 
 // ── Config Loading ───────────────────────────────────────────────────────────
 
@@ -336,9 +410,17 @@ void lcdSleep() {
 void enterLightSleep(uint32_t sleep_ms) {
   lcdSleep();
 
+  if (consumePm1ButtonEvent()) {
+    lcdWake();
+    return;
+  }
+
   esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
   gpio_wakeup_enable(STICKS3_BTN_A_GPIO, GPIO_INTR_LOW_LEVEL);
   gpio_wakeup_enable(STICKS3_BTN_B_GPIO, GPIO_INTR_LOW_LEVEL);
+  if (g_pm1_ready) {
+    gpio_wakeup_enable(STICKS3_PM1_IRQ_GPIO, GPIO_INTR_LOW_LEVEL);
+  }
   esp_sleep_enable_gpio_wakeup();
 
   Serial.printf("Light sleep %lums\n", sleep_ms);
@@ -348,6 +430,7 @@ void enterLightSleep(uint32_t sleep_ms) {
 
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+    consumePm1ButtonEvent();
     lcdWake();
   }
 }
@@ -446,6 +529,10 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Spectacle starting...");
 
+  if (!initPm1ButtonWake()) {
+    Serial.println("PM1 front-button wake unavailable; side-button wake remains enabled.");
+  }
+
   M5.Lcd.setRotation(1);
   M5.Lcd.fillScreen(COLOR_BG);
   M5.Lcd.setTextColor(COLOR_TEXT, COLOR_BG);
@@ -493,6 +580,11 @@ void loop() {
   static uint8_t  prev_detection_count = 0;
   static bool     needs_redraw = true;
   uint32_t now = millis();
+
+  if (consumePm1ButtonEvent()) {
+    lcdWake();
+    needs_redraw = true;
+  }
 
   // ── Handle new detections ─────────────────────────────────────────────────
   if (g_new_detection_flag) {
