@@ -86,6 +86,37 @@ jobs:
       - name: Build SPIFFS image
         run: python -m platformio run -t buildfs
 
+      - name: Verify packaging inputs
+        shell: bash
+        run: |
+          expected=(
+            .pio/build/m5stack-sticks3/bootloader.bin
+            .pio/build/m5stack-sticks3/partitions.bin
+            .pio/build/m5stack-sticks3/firmware.bin
+            .pio/build/m5stack-sticks3/spiffs.bin
+          )
+
+          missing=()
+          for path in "${expected[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              missing+=("$path")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing expected build outputs before packaging:\n'
+            printf '  %s\n' "${missing[@]}"
+            python -m platformio run
+            python -m platformio run -t buildfs
+          fi
+
+          for path in "${expected[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              echo "Required build artifact still missing: $path" >&2
+              exit 1
+            fi
+          done
+
       - name: Package release and Pages assets
         run: |
           python scripts/package_release.py \
