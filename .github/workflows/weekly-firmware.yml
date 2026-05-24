@@ -122,27 +122,7 @@ jobs:
             fi
           done
 
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          idedata_path = Path('.pio/build/m5stack-sticks3/idedata.json')
-          idedata = json.loads(idedata_path.read_text(encoding='utf-8'))
-          flash_images = {
-            Path(image['path']).name: Path(image['path'])
-            for image in idedata.get('extra', {}).get('flash_images', [])
-          }
-
-          required = ('bootloader.bin', 'partitions.bin', 'boot_app0.bin')
-          missing = [name for name in required if name not in flash_images]
-          if missing:
-            raise SystemExit(f"Missing required recovery images in idedata.json: {', '.join(missing)}")
-
-          for name in required:
-            path = flash_images[name]
-            if not path.is_file():
-              raise SystemExit(f"Required recovery image is missing on disk: {path}")
-          PY
+          python scripts/verify_recovery_images.py --build-dir .pio/build/m5stack-sticks3
 
       - name: Package release and Pages assets
         run: |

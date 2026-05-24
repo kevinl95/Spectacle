@@ -91,11 +91,13 @@ static const uint16_t COLOR_TEXT     = TFT_WHITE;
 static const uint16_t COLOR_DIM      = 0x7BEF;  // gray
 static const uint8_t  BATTERY_SAMPLE_COUNT = 4;
 static const uint32_t BATTERY_SAMPLE_DELAY_MS = 20;
-static const uint32_t BATTERY_SAMPLE_INTERVAL_MS = 5000;
+static const uint32_t BATTERY_SAMPLE_INTERVAL_LCD_ON_MS = 5000;
+static const uint32_t BATTERY_SAMPLE_INTERVAL_LCD_OFF_MS = 15000;
 static const uint32_t BATTERY_WAKE_SETTLE_MS = 250;
 static const uint8_t  BATTERY_FILTER_SHIFT = 3;
 static const uint8_t  BATTERY_LEVEL_HYSTERESIS = 2;
 static const uint8_t  BATTERY_LEVEL_REBOUND_HYSTERESIS = 4;
+static const uint8_t  BATTERY_CHARGE_SNAP_THRESHOLD = 10;
 
 static const gpio_num_t STICKS3_BTN_A_GPIO = GPIO_NUM_11;
 static const gpio_num_t STICKS3_BTN_B_GPIO = GPIO_NUM_12;
@@ -228,6 +230,11 @@ void updateDisplayedBatteryLevel(int estimated_level, int charge_state) {
     return;
   }
 
+  if (charge_state == 1 && diff >= BATTERY_CHARGE_SNAP_THRESHOLD) {
+    g_battery_level = estimated_level;
+    return;
+  }
+
   int threshold = BATTERY_LEVEL_HYSTERESIS;
   if ((charge_state == 0 && diff > 0) || (charge_state == 1 && diff < 0)) {
     threshold = BATTERY_LEVEL_REBOUND_HYSTERESIS;
@@ -240,17 +247,42 @@ void updateDisplayedBatteryLevel(int estimated_level, int charge_state) {
   g_battery_level += (diff > 0) ? 1 : -1;
 }
 
+char batteryStatusMarker(int charge_state) {
+  if (charge_state == 1) {
+    return '+';
+  }
+  if (charge_state == 0) {
+    return '-';
+  }
+  return '?';
+}
+
+void formatBatteryStatus(char* buffer, size_t buffer_size) {
+  if (g_battery_voltage_mv > 0) {
+    int whole_volts = g_battery_voltage_mv / 1000;
+    int frac_volts = abs(g_battery_voltage_mv % 1000) / 10;
+    snprintf(buffer, buffer_size, "%d.%02dV%c", whole_volts, frac_volts, batteryStatusMarker(g_battery_charge_state));
+    return;
+  }
+
+  int batt = g_battery_level;
+  if (batt < 0) {
+    batt = M5.Power.getBatteryLevel();
+  }
+  snprintf(buffer, buffer_size, "BAT:%d%%", batt);
+}
+
 void refreshBatteryStatus(bool force = false) {
   uint32_t now = millis();
 
   if (!force) {
-    if (!g_lcd_on) {
-      return;
-    }
     if ((int32_t)(now - g_next_battery_sample_at) < 0) {
       return;
     }
-    if (now - g_last_battery_sample_time < BATTERY_SAMPLE_INTERVAL_MS) {
+    uint32_t sample_interval_ms = g_lcd_on
+      ? BATTERY_SAMPLE_INTERVAL_LCD_ON_MS
+      : BATTERY_SAMPLE_INTERVAL_LCD_OFF_MS;
+    if (now - g_last_battery_sample_time < sample_interval_ms) {
       return;
     }
   }
@@ -575,12 +607,10 @@ void drawStatusBar() {
   M5.Lcd.setCursor(4, 2);
   M5.Lcd.printf("Scan #%lu  RSSI>%d", g_scan_count, g_scan_config.rssi_threshold);
 
-  int batt = g_battery_level;
-  if (batt < 0) {
-    batt = M5.Power.getBatteryLevel();
-  }
-  M5.Lcd.setCursor(M5.Lcd.width() - 48, 2);
-  M5.Lcd.printf("BAT:%d%%", batt);
+  char battery_text[12];
+  formatBatteryStatus(battery_text, sizeof(battery_text));
+  M5.Lcd.setCursor(M5.Lcd.width() - 56, 2);
+  M5.Lcd.print(battery_text);
 }
 
 void drawClearScreen() {
