@@ -6,6 +6,13 @@ Pulls company IDs from the Nordic Semiconductor Bluetooth Numbers Database
 and cross-references them with a curated list of smart glasses manufacturers
 to produce an up-to-date config.json for the GlassesDetector firmware.
 
+*** THIS FILE IS THE SINGLE SOURCE OF TRUTH FOR DEVICE SIGNATURES. ***
+
+Do NOT edit data/config.json directly — it is a generated build artifact
+that gets overwritten by the weekly GitHub Action. To add or update a
+device signature (new glasses model, sniffed BLE data, name prefixes, etc.),
+edit the GLASSES_MANUFACTURERS list below and re-run this script.
+
 Usage:
     python3 generate_config.py
     python3 generate_config.py --output data/config.json
@@ -33,23 +40,33 @@ NORDIC_DB_URL = (
 )
 
 # ── Curated Smart Glasses Manufacturers ──────────────────────────────────────
-# 
-# Each entry maps a search pattern (applied to the Nordic DB company name)
-# to metadata about the device. Multiple company IDs can match one device
-# (e.g., Meta has several registrations).
+#
+# *** CONTRIBUTING: This is where you add/update device signatures. ***
+#
+# To add a new device:
+#   1. Add an entry to GLASSES_MANUFACTURERS below
+#   2. Run: python3 generate_config.py --scan-only   (verify company ID match)
+#   3. Run: python3 generate_config.py               (regenerate config.json)
+#   4. Submit a PR with your changes to THIS FILE only
+#
+# To add sniffed BLE data for an existing device:
+#   1. Use nRF Connect or similar to capture advertisements from the glasses
+#   2. Note: service UUIDs, device name, advertisement payload length
+#   3. Update the corresponding entry below with real values
+#   4. Submit a PR with your changes to THIS FILE only
 #
 # Fields:
-#   search_names: list of substrings to match in Nordic DB (case-insensitive)
-#   device_id:    unique ID for the config entry
-#   label:        human-readable display name on the StickS3 screen
-#   category:     "glasses" = confirmed smart glasses maker
-#                 "glasses_and_other" = makes glasses AND other BLE devices
-#                 "meta_ambiguous" = Meta IDs shared across Ray-Ban + Quest
-#   name_prefixes: known BLE device name prefixes (from real scans)
-#   service_uuids: known BLE service UUIDs (from real scans)
+#   search_names:          list of substrings to match in Nordic DB (case-insensitive)
+#   device_id:             unique ID for the config entry
+#   label:                 human-readable display name on the StickS3 screen
+#   category:              "glasses" = confirmed smart glasses maker
+#                          "glasses_and_other" = makes glasses AND other BLE devices
+#                          "meta_ambiguous" = Meta IDs shared across Ray-Ban + Quest
+#   name_prefixes:         known BLE device name prefixes (from real scans)
+#   service_uuids:         known BLE service UUIDs (from real scans)
 #   adv_data_length_range: [min, max] advertisement payload length (0,0 = unknown)
-#   notes:        documentation string
-#   has_camera:   whether the glasses have an onboard camera
+#   notes:                 documentation string
+#   has_camera:            whether the glasses have an onboard camera
 
 GLASSES_MANUFACTURERS = [
     {

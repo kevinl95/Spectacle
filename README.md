@@ -27,16 +27,19 @@ Each match component contributes a weighted score. Detections are classified as 
 
 ## Configuration
 
-Edit `data/config.json` to customize:
+The device signature database is generated from `generate_config.py`, which pulls manufacturer IDs from the [Nordic Semiconductor Bluetooth Numbers Database](https://github.com/NordicSemiconductor/bluetooth-numbers-database) and merges them with curated smart glasses metadata. A weekly GitHub Action runs this automatically.
 
-- **Scan timing** — how long to scan, how often, RSSI threshold
-- **Confidence weights** — tune how much each signal type contributes
-- **Device signatures** — add new glasses models as they come out
+**Do NOT edit `data/config.json` directly** — it is a generated artifact. To change scan settings, add devices, or update sniffed BLE data, edit `generate_config.py` and re-run:
 
-Upload the config to SPIFFS:
-```
+```bash
+pip install requests
+python3 generate_config.py          # regenerate data/config.json
 pio run -t uploadfs
 ```
+
+If `pio` is not on your `PATH`, use `python3 -m platformio run -t uploadfs`.
+
+Scan timing, confidence weights, and RSSI thresholds are also defined in `generate_config.py` in the `generate_config()` function.
 
 ## Building
 
@@ -54,6 +57,32 @@ pio run -t uploadfs
 pio device monitor
 ```
 
+If `pio` is not on your `PATH`, the equivalent commands are `python3 -m platformio run`, `python3 -m platformio run -t upload`, `python3 -m platformio run -t uploadfs`, `python3 -m platformio run -t buildfs`, and `python3 -m platformio device monitor`.
+
+## Automated releases
+
+The repository now includes `.github/workflows/weekly-firmware.yml`, which:
+
+- regenerates `data/config.json` on a weekly schedule and on manual dispatch
+- commits the generated config back to the default branch when it changes
+- builds both the firmware image and the SPIFFS image
+- publishes a GitHub release with the flash assets and manifest
+- deploys a GitHub Pages updater site backed by `esptool.js`
+
+The Pages updater uses the real partition layout from `default_8MB.csv`:
+
+- firmware at `0x10000`
+- SPIFFS at `0x670000`
+
+## Web flasher
+
+The browser updater lives in `docs/` and is intended for existing StickS3 devices.
+
+- **Routine update** flashes only the application image and the SPIFFS config image.
+- **Factory reflash** performs a full erase and then restores bootloader, partition table, application, and SPIFFS.
+
+Do not full-erase the device for a normal update unless you are also restoring the bootloader and partition table. Erasing the whole chip and then flashing only the app plus SPIFFS will leave the device unbootable.
+
 ## Controls
 
 - **Button A** — Force immediate rescan
@@ -61,22 +90,25 @@ pio device monitor
 
 ## Adding new glasses
 
-Add entries to the `devices` array in `data/config.json`:
+Add an entry to the `GLASSES_MANUFACTURERS` list in `generate_config.py`:
 
-```json
+```python
 {
-  "id": "new_glasses",
-  "label": "Brand Name",
-  "category": "glasses",
-  "manufacturer_ids": ["0xABCD"],
-  "service_uuids": ["0000abcd-0000-1000-8000-00805f9b34fb"],
-  "name_prefixes": ["BrandName"],
-  "adv_data_length_range": [20, 40],
-  "notes": "Description"
+    "search_names": ["new company"],          # substring match against Nordic DB
+    "device_id": "new_glasses",
+    "label": "Brand Name",                    # shown on the StickS3 screen
+    "category": "glasses",
+    "name_prefixes": ["BrandName"],           # BLE device name prefixes
+    "service_uuids": [],                       # from nRF Connect scan
+    "adv_data_length_range": [0, 0],          # from nRF Connect scan
+    "notes": "Description",
+    "has_camera": True,
 }
 ```
 
-Set `category` to `"glasses"` for confirmed smart glasses, or a custom value like `"meta_ambiguous"` for IDs shared across product lines. The display uses category to choose alert colors.
+Then run `python3 generate_config.py` to regenerate `data/config.json`.
+
+Set `category` to `"glasses"` for confirmed smart glasses, `"glasses_and_other"` for companies that also make non-glasses BLE devices (requires `name_prefixes` to avoid false positives), or `"meta_ambiguous"` for IDs shared across product lines. The display uses category to choose alert colors.
 
 ## Research needed
 
@@ -87,7 +119,7 @@ The `adv_data_length_range` and `service_uuids` fields are mostly empty — they
 - Payload length
 - Advertisement interval timing
 
-PRs with real-world scan data welcome.
+PRs with real-world scan data welcome — update the relevant entry in `generate_config.py` (not `data/config.json`).
 
 ## License
 

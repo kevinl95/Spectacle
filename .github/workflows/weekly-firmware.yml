@@ -1,0 +1,135 @@
+name: Weekly Firmware Release
+
+on:
+  schedule:
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: weekly-firmware-release
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Pages
+        uses: actions/configure-pages@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
+
+      - name: Install Python tooling
+        run: python -m pip install --upgrade requests platformio
+
+      - name: Regenerate config
+        run: python generate_config.py --output data/config.json
+
+      - name: Detect generated config changes
+        id: config_changes
+        shell: bash
+        run: |
+          if git diff --quiet -- data/config.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit generated config
+        if: steps.config_changes.outputs.changed == 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/config.json
+          git commit -m "chore: refresh generated config"
+          git push
+
+      - name: Capture release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          release_tag="weekly-$(date -u +%Y%m%d-%H%M)-${GITHUB_RUN_NUMBER}"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build firmware image
+        run: python -m platformio run
+
+      - name: Build SPIFFS image
+        run: python -m platformio run -t buildfs
+
+      - name: Package release and Pages assets
+        run: |
+          python scripts/package_release.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${{ steps.release_meta.outputs.tag }}" \
+            --published-at "${{ steps.release_meta.outputs.published_at }}" \
+            --commit-sha "${{ steps.release_meta.outputs.commit_sha }}" \
+            --config-changed "${{ steps.config_changes.outputs.changed }}" \
+            --config data/config.json \
+            --build-dir .pio/build/m5stack-sticks3 \
+            --partition-csv "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/default_8MB.csv" \
+            --release-dir dist/release \
+            --site-dir docs \
+            --pages-dir dist/pages
+
+      - name: Upload release bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectacle-release-${{ steps.release_meta.outputs.tag }}
+          path: dist/release
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          target_commitish: ${{ steps.release_meta.outputs.commit_sha }}
+          name: Spectacle ${{ steps.release_meta.outputs.tag }}
+          files: dist/release/*
+          body: |
+            Routine update release for the Spectacle smart-glasses detector.
+
+            - Config regenerated from the Nordic BLE company database: ${{ steps.config_changes.outputs.changed }}
+            - Application image offset: 0x10000
+            - SPIFFS image offset: 0x670000
+
+            Use the GitHub Pages updater for routine updates. Full erase is reserved for recovery because it also clears the bootloader and partition table.
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/pages
+
+  deploy-pages:
+    needs: build-release
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Deploy Pages site
+        id: deploy
+        uses: actions/deploy-pages@v4

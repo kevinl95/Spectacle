@@ -182,7 +182,7 @@ bool loadConfig(const char* path) {
 
 // ── BLE Scanning ─────────────────────────────────────────────────────────────
 
-int scoreDetection(NimBLEAdvertisedDevice* device, const DeviceSignature& sig) {
+int scoreDetection(const NimBLEAdvertisedDevice* device, const DeviceSignature& sig) {
   int score = 0;
 
   // Check manufacturer IDs
@@ -222,7 +222,7 @@ int scoreDetection(NimBLEAdvertisedDevice* device, const DeviceSignature& sig) {
 
   // Check advertisement data length range
   if (sig.adv_len_min > 0 && sig.adv_len_max > 0) {
-    size_t payload_len = device->getPayloadLength();
+    size_t payload_len = device->getPayload().size();
     if (payload_len >= sig.adv_len_min && payload_len <= sig.adv_len_max) {
       score += g_weights.adv_length_match;
     }
@@ -232,7 +232,7 @@ int scoreDetection(NimBLEAdvertisedDevice* device, const DeviceSignature& sig) {
 }
 
 class ScanCallbacks : public NimBLEScanCallbacks {
-  void onResult(NimBLEAdvertisedDevice* device) override {
+  void onResult(const NimBLEAdvertisedDevice* device) override {
     int rssi = device->getRSSI();
     if (rssi < g_scan_config.rssi_threshold) return;
 
@@ -274,7 +274,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     }
   }
 
-  void onScanEnd(NimBLEScanResults results, int reason) override {
+  void onScanEnd(const NimBLEScanResults& results, int reason) override {
     g_scanning = false;
   }
 };

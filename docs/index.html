@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spectacle Web Flasher</title>
+    <meta
+      name="description"
+      content="Flash the latest Spectacle firmware and SPIFFS config from GitHub Pages using esptool.js and Web Serial."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero panel">
+        <div class="eyebrow">Spectacle / Browser Updater</div>
+        <h1>Flash the weekly smart-glasses detector build without leaving the browser.</h1>
+        <p class="lede">
+          Routine updates write only the application image and the SPIFFS config image.
+          Full erase is reserved for recovery, because it also wipes the bootloader and partition table.
+        </p>
+        <div class="hero-strip">
+          <div class="hero-pill" id="manifestState">Loading release manifest…</div>
+          <div class="hero-pill" id="serialState">Checking Web Serial support…</div>
+          <div class="hero-pill" id="connectionState">Not connected</div>
+        </div>
+      </section>
+
+      <section class="grid two-up">
+        <article class="panel">
+          <div class="section-tag">Latest Build</div>
+          <h2>Release snapshot</h2>
+          <dl class="facts">
+            <div>
+              <dt>Release tag</dt>
+              <dd id="releaseTag">Pending</dd>
+            </div>
+            <div>
+              <dt>Published</dt>
+              <dd id="releaseDate">Pending</dd>
+            </div>
+            <div>
+              <dt>Board</dt>
+              <dd id="boardName">M5Stack StickS3</dd>
+            </div>
+            <div>
+              <dt>Chip</dt>
+              <dd id="chipName">ESP32-S3</dd>
+            </div>
+            <div>
+              <dt>Detector signatures</dt>
+              <dd id="deviceCount">Pending</dd>
+            </div>
+            <div>
+              <dt>Config path</dt>
+              <dd id="configPath">/config.json</dd>
+            </div>
+          </dl>
+          <a id="releaseLink" class="text-link" href="#" target="_blank" rel="noreferrer">Open release assets</a>
+        </article>
+
+        <article class="panel">
+          <div class="section-tag">Update Flow</div>
+          <h2>Routine update</h2>
+          <p class="panel-copy" id="updateNote">
+            Connect the StickS3 over USB, enter the bootloader when prompted, then flash the app and SPIFFS images.
+          </p>
+          <div class="button-row">
+            <button id="connectButton" class="primary" type="button">Connect Device</button>
+            <button id="disconnectButton" class="secondary" type="button">Disconnect</button>
+          </div>
+          <div class="button-row">
+            <button id="flashButton" class="accent" type="button">Flash Update</button>
+          </div>
+          <p class="helper">
+            Use Chrome or Edge on desktop with a data-capable USB cable. The default path does not erase the entire chip.
+          </p>
+        </article>
+      </section>
+
+      <section class="grid two-up">
+        <article class="panel">
+          <div class="section-tag">Flash Map</div>
+          <h2>What gets written</h2>
+          <ul class="image-list" id="imageList"></ul>
+        </article>
+
+        <article class="panel">
+          <div class="section-tag">Progress</div>
+          <h2>Current operation</h2>
+          <p class="progress-label" id="progressLabel">Waiting for a device.</p>
+          <progress id="progressBar" class="progress-bar" max="100" value="0"></progress>
+          <p class="helper" id="progressDetail">No flash job is running.</p>
+        </article>
+      </section>
+
+      <section class="grid two-up">
+        <article class="panel">
+          <div class="section-tag">Offsets</div>
+          <h2>Routine update map</h2>
+          <div class="offset-list">
+            <div>
+              <span>Firmware</span>
+              <strong id="firmwareOffset">0x10000</strong>
+            </div>
+            <div>
+              <span>SPIFFS</span>
+              <strong id="spiffsOffset">0x670000</strong>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel caution-panel">
+          <div class="section-tag">Recovery Only</div>
+          <h2>Factory reflash</h2>
+          <p class="panel-copy" id="recoveryNote">
+            Full erase is not required for normal updates. Use factory reflash only when the device is corrupted or the flash layout needs repair.
+          </p>
+          <div class="button-row">
+            <button id="factoryFlashButton" class="danger" type="button">Factory Reflash</button>
+          </div>
+          <p class="helper">
+            This path erases the entire chip and then restores the bootloader, partition table, application, and SPIFFS images.
+          </p>
+        </article>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="section-tag">Serial Log</div>
+        <h2>esptool.js output</h2>
+        <pre id="serialLog" class="terminal" aria-live="polite"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>
