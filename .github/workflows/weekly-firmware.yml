@@ -92,6 +92,7 @@ jobs:
           expected=(
             .pio/build/m5stack-sticks3/bootloader.bin
             .pio/build/m5stack-sticks3/partitions.bin
+            .pio/build/m5stack-sticks3/idedata.json
             .pio/build/m5stack-sticks3/firmware.bin
             .pio/build/m5stack-sticks3/spiffs.bin
           )
@@ -116,6 +117,28 @@ jobs:
               exit 1
             fi
           done
+
+          python - <<'PY'
+            import json
+            from pathlib import Path
+
+            idedata_path = Path('.pio/build/m5stack-sticks3/idedata.json')
+            idedata = json.loads(idedata_path.read_text(encoding='utf-8'))
+            flash_images = {
+              Path(image['path']).name: Path(image['path'])
+              for image in idedata.get('extra', {}).get('flash_images', [])
+            }
+
+            required = ('bootloader.bin', 'partitions.bin', 'boot_app0.bin')
+            missing = [name for name in required if name not in flash_images]
+            if missing:
+              raise SystemExit(f"Missing required recovery images in idedata.json: {', '.join(missing)}")
+
+            for name in required:
+              path = flash_images[name]
+              if not path.is_file():
+                raise SystemExit(f"Required recovery image is missing on disk: {path}")
+            PY
 
       - name: Package release and Pages assets
         run: |
@@ -151,6 +174,7 @@ jobs:
             - Config regenerated from the Nordic BLE company database: ${{ steps.config_changes.outputs.changed }}
             - Application image offset: 0x10000
             - SPIFFS image offset: 0x670000
+            - Recovery bundle includes boot metadata at 0xE000
 
             Use the GitHub Pages updater for routine updates. Full erase is reserved for recovery because it also clears the bootloader and partition table.
 

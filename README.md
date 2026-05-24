@@ -103,7 +103,7 @@ The Pages updater uses the real partition layout from `default_8MB.csv`:
 The browser updater lives in `docs/` and is intended for existing StickS3 devices.
 
 - **Routine update** flashes only the application image and the SPIFFS config image.
-- **Factory reflash** performs a full erase and then restores bootloader, partition table, application, and SPIFFS.
+- **Factory reflash** performs a full erase and then restores bootloader, boot metadata, partition table, application, and SPIFFS.
 
 Routine update is only for devices that already have Spectacle's flash layout in place. If the device is fresh, has been fully erased, or boots with `SPIFFS FAILED`, use factory reflash instead.
 
@@ -113,8 +113,9 @@ The web flasher requires Chrome or Edge for the Web Serial API. The same USB tro
 
 ## Controls
 
-- **Button A** — Force immediate rescan
-- **Button B** — Cycle RSSI threshold (-75 → -85 → -95 → -50 → ...)
+- **Small side button (Button A)** — Wake the display and force an immediate rescan
+- **Large side button (Button B)** — Wake the display and cycle RSSI threshold (-75 → -85 → -95 → -50 → ...)
+- **Top button** — Not used by the app; leave it for the device's own power/reset behavior
 
 ## Adding new glasses
 

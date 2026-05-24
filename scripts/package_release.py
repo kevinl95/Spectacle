@@ -22,10 +22,35 @@ BAUD_RATE = 115200
 ASSET_NAMES = {
     "bootloader": "spectacle-bootloader.bin",
     "partitions": "spectacle-partitions.bin",
+    "boot_app0": "spectacle-boot-app0.bin",
     "firmware": "spectacle-firmware.bin",
     "spiffs": "spectacle-spiffs.bin",
     "manifest": "spectacle-flash-manifest.json",
     "metadata": "spectacle-build-metadata.json",
+}
+
+PLATFORMIO_FLASH_ASSETS = {
+    "bootloader.bin": {
+        "slot": "bootloader",
+        "label": "Bootloader",
+        "filename": ASSET_NAMES["bootloader"],
+        "default": False,
+        "description": "Required only for full-chip recovery or first-time provisioning.",
+    },
+    "partitions.bin": {
+        "slot": "partitions",
+        "label": "Partition table",
+        "filename": ASSET_NAMES["partitions"],
+        "default": False,
+        "description": "Required only when erasing the chip or repairing the flash layout.",
+    },
+    "boot_app0.bin": {
+        "slot": "boot_app0",
+        "label": "Boot metadata",
+        "filename": ASSET_NAMES["boot_app0"],
+        "default": False,
+        "description": "Required for full-chip recovery on this ESP32-S3 partition layout.",
+    },
 }
 
 
@@ -112,6 +137,29 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def load_platformio_flash_images(build_dir: Path) -> tuple[dict[str, dict[str, object]], int]:
+    ide_data_path = build_dir / "idedata.json"
+    ide_data = json.loads(ide_data_path.read_text(encoding="utf-8"))
+    flash_images: dict[str, dict[str, object]] = {}
+
+    for image in ide_data.get("extra", {}).get("flash_images", []):
+        source = Path(image["path"])
+        flash_images[source.name] = {
+            "path": source,
+            "offset": parse_numeric(str(image["offset"])),
+        }
+
+    application_offset = parse_numeric(str(ide_data.get("extra", {}).get("application_offset", "0x10000")))
+    return flash_images, application_offset
+
+
+def require_flash_image(flash_images: dict[str, dict[str, object]], image_name: str) -> dict[str, object]:
+    image = flash_images.get(image_name)
+    if image is None:
+        raise ValueError(f"Required PlatformIO flash image was not found: {image_name}")
+    return image
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Package release assets for Spectacle")
     parser.add_argument("--repo", required=True, help="GitHub repository in owner/name form")
@@ -144,28 +192,35 @@ def main() -> None:
     partitions = load_partitions(partition_csv)
     app_partition = find_partition(partitions, name="app0")
     spiffs_partition = find_partition(partitions, subtype="spiffs")
+    flash_images, application_offset = load_platformio_flash_images(build_dir)
+
+    if app_partition.offset != application_offset:
+        raise ValueError(
+            f"Application offset mismatch between partition table ({to_hex(app_partition.offset)}) and PlatformIO ({to_hex(application_offset)})"
+        )
+
+    bootloader_image = require_flash_image(flash_images, "bootloader.bin")
+    partitions_image = require_flash_image(flash_images, "partitions.bin")
+    boot_app0_image = require_flash_image(flash_images, "boot_app0.bin")
 
     release_base_url = f"https://github.com/{args.repo}/releases/download/{args.tag}"
     release_page_url = f"https://github.com/{args.repo}/releases/tag/{args.tag}"
 
     planned_assets = [
         {
-            "slot": "bootloader",
-            "label": "Bootloader",
-            "source": build_dir / "bootloader.bin",
-            "filename": ASSET_NAMES["bootloader"],
-            "address": BOOTLOADER_OFFSET,
-            "default": False,
-            "description": "Required only for full-chip recovery or first-time provisioning.",
+            **PLATFORMIO_FLASH_ASSETS["bootloader.bin"],
+            "source": bootloader_image["path"],
+            "address": bootloader_image["offset"],
         },
         {
-            "slot": "partitions",
-            "label": "Partition table",
-            "source": build_dir / "partitions.bin",
-            "filename": ASSET_NAMES["partitions"],
-            "address": PARTITIONS_OFFSET,
-            "default": False,
-            "description": "Required only when erasing the chip or repairing the flash layout.",
+            **PLATFORMIO_FLASH_ASSETS["partitions.bin"],
+            "source": partitions_image["path"],
+            "address": partitions_image["offset"],
+        },
+        {
+            **PLATFORMIO_FLASH_ASSETS["boot_app0.bin"],
+            "source": boot_app0_image["path"],
+            "address": boot_app0_image["offset"],
         },
         {
             "slot": "firmware",
@@ -252,6 +307,7 @@ def main() -> None:
             "spiffsOffset": to_hex(spiffs_partition.offset),
             "bootloaderOffset": to_hex(BOOTLOADER_OFFSET),
             "partitionTableOffset": to_hex(PARTITIONS_OFFSET),
+            "bootApp0Offset": to_hex(int(boot_app0_image["offset"])),
         },
         "update": {
             "eraseAll": False,
@@ -259,7 +315,7 @@ def main() -> None:
         },
         "recovery": {
             "eraseAll": True,
-            "note": "Factory reflash erases the whole chip and then restores bootloader, partition table, application, and SPIFFS. Use this for first install, after a full erase, or if the device boots with SPIFFS FAILED.",
+            "note": "Factory reflash erases the whole chip and then restores bootloader, boot metadata, partition table, application, and SPIFFS. Use this for first install, after a full erase, or if the device boots with SPIFFS FAILED.",
         },
         "images": images,
         "metadata": metadata,

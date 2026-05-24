@@ -20,6 +20,7 @@
 #include <NimBLEDevice.h>
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
+#include <driver/gpio.h>
 #include <esp_sleep.h>
 
 // ── Structs ──────────────────────────────────────────────────────────────────
@@ -81,6 +82,9 @@ static const uint16_t COLOR_CAMERA   = 0xF800;  // red - has camera
 static const uint16_t COLOR_NOCAM    = 0xFDA0;  // amber - no camera
 static const uint16_t COLOR_TEXT     = TFT_WHITE;
 static const uint16_t COLOR_DIM      = 0x7BEF;  // gray
+
+static const gpio_num_t STICKS3_BTN_A_GPIO = GPIO_NUM_11;
+static const gpio_num_t STICKS3_BTN_B_GPIO = GPIO_NUM_12;
 
 // ── Config Loading ───────────────────────────────────────────────────────────
 
@@ -333,8 +337,9 @@ void enterLightSleep(uint32_t sleep_ms) {
   lcdSleep();
 
   esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
-  // StickS3 BtnA — verify GPIO pin against your board revision
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_37, 0);
+  gpio_wakeup_enable(STICKS3_BTN_A_GPIO, GPIO_INTR_LOW_LEVEL);
+  gpio_wakeup_enable(STICKS3_BTN_B_GPIO, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
 
   Serial.printf("Light sleep %lums\n", sleep_ms);
   Serial.flush();
@@ -342,7 +347,7 @@ void enterLightSleep(uint32_t sleep_ms) {
   esp_light_sleep_start();
 
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+  if (cause == ESP_SLEEP_WAKEUP_GPIO) {
     lcdWake();
   }
 }
