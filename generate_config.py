@@ -254,7 +254,7 @@ def generate_config(
         "nordic_db_url": NORDIC_DB_URL,
         "scan": {
             "window_ms": 1500,
-            "interval_ms": 10000,
+            "interval_ms": 20000,
             "rssi_threshold": -75,
             "display_timeout_ms": 30000,
             "lcd_on_ms": 3000,
