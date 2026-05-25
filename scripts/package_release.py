@@ -311,11 +311,11 @@ def main() -> None:
         },
         "update": {
             "eraseAll": False,
-            "note": "Routine updates flash only the application and SPIFFS images. Use them only on devices already provisioned with Spectacle's partition table.",
+            "note": "Routine updates flash only the application and SPIFFS images. Use them only on devices already provisioned with Spectacle's partition table, and put the StickS3 into flashing mode first by pressing both side buttons until the green LED blinks.",
         },
         "recovery": {
             "eraseAll": True,
-            "note": "Factory reflash erases the whole chip and then restores bootloader, boot metadata, partition table, application, and SPIFFS. Use this for first install, after a full erase, or if the device boots with SPIFFS FAILED.",
+            "note": "Factory reflash erases the whole chip and then restores bootloader, boot metadata, partition table, application, and SPIFFS. Use this for first install, after a full erase, or if the device boots with SPIFFS FAILED. Enter flashing mode by pressing both side buttons until the green LED blinks.",
         },
         "images": images,
         "metadata": metadata,

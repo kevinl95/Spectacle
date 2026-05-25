@@ -347,7 +347,7 @@ async function flash(mode) {
     await state.loader.after("hard_reset");
     elements.progressBar.value = 100;
     elements.progressLabel.textContent = isFactory ? "Factory reflash complete" : "Routine update complete";
-    elements.progressDetail.textContent = "The StickS3 is rebooting into the flashed firmware.";
+    elements.progressDetail.textContent = "Flashing is complete. If the StickS3 stays in flashing mode, reboot it manually to start the firmware.";
     appendLog("Flash completed successfully.\n");
   } catch (error) {
     elements.progressLabel.textContent = "Flash failed";
