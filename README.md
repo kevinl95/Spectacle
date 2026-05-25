@@ -49,10 +49,10 @@ Scan timing, display behavior, and RSSI thresholds are also defined in `generate
 The StickS3 uses the ESP32-S3's native USB rather than a separate UART bridge chip. To flash firmware, put the device into download mode:
 
 1. Connect the StickS3 to your computer via USB-C with a data-capable cable.
-2. Press and hold the reset button on the side of the device for about 2 seconds.
-3. When the internal green LED blinks, release the button. The device is now in download mode.
+2. Press both side buttons to enter download mode.
+3. When the internal green LED blinks, the device is ready to flash.
 
-If you enter download mode accidentally and want to return to normal operation without flashing, press the reset button briefly.
+If you enter download mode accidentally and want to return to normal operation without flashing, reboot the device.
 
 ### Windows USB troubleshooting
 
@@ -110,6 +110,8 @@ Routine update is only for devices that already have Spectacle's flash layout in
 Do not full-erase the device for a normal update unless you are also restoring the bootloader and partition table. Erasing the whole chip and then flashing only the app plus SPIFFS will leave the device unbootable.
 
 The web flasher requires Chrome or Edge for the Web Serial API. The same USB troubleshooting steps above still apply here. If the StickS3 shows up as `USB device not recognized`, try a USB 2.0 port first and confirm the device is actually in download mode before retrying.
+
+For a brand-new StickS3, use **Factory reflash** in the web flasher. A fresh device does not already have Spectacle's flash layout or SPIFFS image, so the routine update path is the wrong first install.
 
 ## Controls
 
