@@ -150,6 +150,10 @@ The strongest detections come from real manufacturer data payloads and stable de
 
 PRs with real-world scan data welcome — update the relevant entry in `generate_config.py` (not `data/config.json`).
 
+## Acknowledgments
+
+Spectacle was inspired by Nearby Glasses by Yann Jeanrenaud. His work identifying the manufacturer company ID approach and documenting real BLE advertisement frames made this project possible.
+
 ## License
 
 MIT
