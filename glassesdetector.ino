@@ -68,6 +68,11 @@ static SemaphoreHandle_t g_detection_mutex;
 static bool              g_scanning = false;
 static uint32_t          g_last_detection_time = 0;
 static uint32_t          g_scan_count = 0;
+static const bool        USE_DEEP_SLEEP_BETWEEN_SCANS = true;
+
+RTC_DATA_ATTR static uint32_t g_rtc_scan_count = 0;
+RTC_DATA_ATTR static int      g_rtc_rssi_threshold = -75;
+RTC_DATA_ATTR static bool     g_rtc_rssi_threshold_valid = false;
 
 // ── LCD & Power State ────────────────────────────────────────────────────────
 
@@ -79,6 +84,10 @@ static int               g_battery_voltage_mv = 0;
 static int               g_battery_filtered_mv = 0;
 static uint32_t          g_last_battery_sample_time = 0;
 static uint32_t          g_next_battery_sample_at = 0;
+static bool              g_skip_next_btn_b_press = false;
+
+static esp_sleep_wakeup_cause_t g_boot_wakeup_cause = ESP_SLEEP_WAKEUP_UNDEFINED;
+static uint64_t                 g_boot_gpio_wakeup_status = 0;
 
 // ── Display Constants ────────────────────────────────────────────────────────
 
@@ -522,6 +531,7 @@ void startScan() {
   scan->start(g_scan_config.window_ms / 1000, false);
   g_scanning = true;
   g_scan_count++;
+  g_rtc_scan_count = g_scan_count;
 }
 
 // ── LCD & Power Management ───────────────────────────────────────────────────
@@ -544,10 +554,35 @@ void lcdSleep() {
   }
 }
 
+const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
+  switch (cause) {
+    case ESP_SLEEP_WAKEUP_EXT0: return "ext0";
+    case ESP_SLEEP_WAKEUP_EXT1: return "ext1";
+    case ESP_SLEEP_WAKEUP_TIMER: return "timer";
+    case ESP_SLEEP_WAKEUP_TOUCHPAD: return "touchpad";
+    case ESP_SLEEP_WAKEUP_ULP: return "ulp";
+    case ESP_SLEEP_WAKEUP_GPIO: return "gpio";
+    case ESP_SLEEP_WAKEUP_UART: return "uart";
+    default: return "other";
+  }
+}
+
+void cycleRssiThreshold() {
+  g_scan_config.rssi_threshold -= 10;
+  if (g_scan_config.rssi_threshold < -100) {
+    g_scan_config.rssi_threshold = -50;
+  }
+
+  g_rtc_rssi_threshold = g_scan_config.rssi_threshold;
+  g_rtc_rssi_threshold_valid = true;
+  Serial.printf("RSSI threshold: %d\n", g_scan_config.rssi_threshold);
+}
+
 void enterLightSleep(uint32_t sleep_ms) {
   lcdSleep();
 
   if (consumePm1ButtonEvent()) {
+    Serial.println("Skipping light sleep due to pending PM1 button event");
     lcdWake();
     return;
   }
@@ -566,10 +601,40 @@ void enterLightSleep(uint32_t sleep_ms) {
   esp_light_sleep_start();
 
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  Serial.printf("Wake cause: %s (%d)\n", wakeCauseName(cause), (int)cause);
   if (cause == ESP_SLEEP_WAKEUP_GPIO) {
     consumePm1ButtonEvent();
     lcdWake();
   }
+}
+
+void enterDeepSleep(uint32_t sleep_ms) {
+  lcdSleep();
+
+  if (consumePm1ButtonEvent()) {
+    Serial.println("Skipping deep sleep due to pending PM1 button event");
+    lcdWake();
+    return;
+  }
+
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
+
+  uint64_t wake_mask = (1ULL << STICKS3_BTN_A_GPIO) | (1ULL << STICKS3_BTN_B_GPIO);
+  if (g_pm1_ready) {
+    wake_mask |= (1ULL << STICKS3_PM1_IRQ_GPIO);
+  }
+
+  esp_err_t wake_err = esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+  if (wake_err != ESP_OK) {
+    Serial.printf("Deep sleep ext1 wake setup failed: %d\n", (int)wake_err);
+    lcdWake();
+    return;
+  }
+
+  Serial.printf("Deep sleep %lums\n", sleep_ms);
+  Serial.flush();
+  esp_deep_sleep_start();
 }
 
 // ── Display ──────────────────────────────────────────────────────────────────
@@ -648,31 +713,55 @@ void drawDetectionScreen() {
 }
 
 void alertBuzz() {
+  M5.Speaker.begin();
+  M5.Speaker.setVolume(64);
   M5.Speaker.tone(2000, 100);
   delay(150);
   M5.Speaker.tone(2000, 100);
+  delay(120);
+  M5.Speaker.end();
 }
 
 // ── Setup & Loop ─────────────────────────────────────────────────────────────
 
 void setup() {
+  g_boot_wakeup_cause = esp_sleep_get_wakeup_cause();
+  g_boot_gpio_wakeup_status = esp_sleep_get_ext1_wakeup_status();
+
+  const bool woke_from_deep_sleep = g_boot_wakeup_cause != ESP_SLEEP_WAKEUP_UNDEFINED;
+  const bool woke_from_timer = g_boot_wakeup_cause == ESP_SLEEP_WAKEUP_TIMER;
+  const bool woke_from_ext = g_boot_wakeup_cause == ESP_SLEEP_WAKEUP_EXT1;
+  const bool quiet_boot = USE_DEEP_SLEEP_BETWEEN_SCANS && woke_from_timer;
+
   auto cfg = M5.config();
   M5.begin(cfg);
 
+  if (quiet_boot) {
+    M5.Lcd.setBrightness(0);
+    M5.Lcd.sleep();
+    g_lcd_on = false;
+  }
+
   Serial.begin(115200);
   Serial.println("Spectacle starting...");
+  Serial.printf("Boot wake cause: %s (%d)\n", wakeCauseName(g_boot_wakeup_cause), (int)g_boot_wakeup_cause);
+  if (g_boot_gpio_wakeup_status != 0) {
+    Serial.printf("Boot ext wake status: 0x%llX\n", (unsigned long long)g_boot_gpio_wakeup_status);
+  }
 
   if (!initPm1ButtonWake()) {
     Serial.println("PM1 front-button wake unavailable; side-button wake remains enabled.");
   }
 
   M5.Lcd.setRotation(1);
-  M5.Lcd.fillScreen(COLOR_BG);
-  M5.Lcd.setTextColor(COLOR_TEXT, COLOR_BG);
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(4, 4);
-  M5.Lcd.println("Spectacle v0.1");
-  M5.Lcd.println("Loading config...");
+  if (!quiet_boot) {
+    M5.Lcd.fillScreen(COLOR_BG);
+    M5.Lcd.setTextColor(COLOR_TEXT, COLOR_BG);
+    M5.Lcd.setTextSize(1);
+    M5.Lcd.setCursor(4, 4);
+    M5.Lcd.println("Spectacle v0.1");
+    M5.Lcd.println("Loading config...");
+  }
 
   if (!SPIFFS.begin(true)) {
     M5.Lcd.println("SPIFFS FAILED");
@@ -690,21 +779,48 @@ void setup() {
     while (1) delay(1000);
   }
 
-  M5.Lcd.printf("Loaded %d sigs\n", g_signature_count);
-  M5.Lcd.printf("RSSI thresh: %d\n", g_scan_config.rssi_threshold);
+  g_scan_count = g_rtc_scan_count;
+  if (g_rtc_rssi_threshold_valid) {
+    g_scan_config.rssi_threshold = g_rtc_rssi_threshold;
+  } else {
+    g_rtc_rssi_threshold = g_scan_config.rssi_threshold;
+    g_rtc_rssi_threshold_valid = true;
+  }
+
+  if (USE_DEEP_SLEEP_BETWEEN_SCANS && woke_from_ext && (g_boot_gpio_wakeup_status & (1ULL << STICKS3_BTN_B_GPIO))) {
+    cycleRssiThreshold();
+    g_skip_next_btn_b_press = true;
+  }
+
+  if (woke_from_ext && (g_boot_gpio_wakeup_status & (1ULL << STICKS3_PM1_IRQ_GPIO))) {
+    consumePm1ButtonEvent();
+  }
+
+  if (!quiet_boot) {
+    M5.Lcd.printf("Loaded %d sigs\n", g_signature_count);
+    M5.Lcd.printf("RSSI thresh: %d\n", g_scan_config.rssi_threshold);
+  }
 
   g_detection_mutex = xSemaphoreCreateMutex();
 
   NimBLEDevice::init("");
-  M5.Lcd.println("BLE initialized");
+  if (!quiet_boot) {
+    M5.Lcd.println("BLE initialized");
+  }
 
   M5.Speaker.setVolume(64);
-  M5.Lcd.setBrightness(g_scan_config.lcd_brightness);
+  if (quiet_boot) {
+    lcdSleep();
+  } else {
+    M5.Lcd.setBrightness(g_scan_config.lcd_brightness);
+  }
   g_lcd_wake_time = millis();
   g_next_battery_sample_at = g_lcd_wake_time + BATTERY_WAKE_SETTLE_MS;
   refreshBatteryStatus(true);
 
-  delay(1500);
+  if (!woke_from_deep_sleep) {
+    delay(1500);
+  }
   Serial.println("Setup complete, starting scan loop");
   startScan();
 }
@@ -772,13 +888,15 @@ void loop() {
 
   // ── Button B: cycle RSSI threshold ────────────────────────────────────────
   if (M5.BtnB.wasPressed()) {
-    lcdWake();
-    g_scan_config.rssi_threshold -= 10;
-    if (g_scan_config.rssi_threshold < -100) {
-      g_scan_config.rssi_threshold = -50;
+    if (g_skip_next_btn_b_press) {
+      g_skip_next_btn_b_press = false;
+    } else {
+      lcdWake();
+      cycleRssiThreshold();
+      needs_redraw = true;
     }
-    Serial.printf("RSSI threshold: %d\n", g_scan_config.rssi_threshold);
-    needs_redraw = true;
+  } else if (g_skip_next_btn_b_press && !M5.BtnB.isPressed()) {
+    g_skip_next_btn_b_press = false;
   }
 
   // ── Sleep between scans ───────────────────────────────────────────────────
@@ -786,7 +904,11 @@ void loop() {
     if (!g_lcd_on) {
       uint32_t sleep_time = g_scan_config.interval_ms - g_scan_config.window_ms;
       if (sleep_time > 100) {
-        enterLightSleep(sleep_time);
+        if (USE_DEEP_SLEEP_BETWEEN_SCANS) {
+          enterDeepSleep(sleep_time);
+        } else {
+          enterLightSleep(sleep_time);
+        }
         startScan();
         needs_redraw = true;
       }
