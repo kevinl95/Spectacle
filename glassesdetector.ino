@@ -69,6 +69,10 @@ static bool              g_scanning = false;
 static uint32_t          g_last_detection_time = 0;
 static uint32_t          g_scan_count = 0;
 static const bool        USE_DEEP_SLEEP_BETWEEN_SCANS = true;
+static const bool        ENABLE_ALERT_SOUND = true;
+static const bool        ENABLE_INTERNAL_MIC = false;
+// StickS3's external 5V output rail is unused here and produces audible converter whine.
+static const bool        ENABLE_EXTERNAL_OUTPUT_POWER = false;
 
 RTC_DATA_ATTR static uint32_t g_rtc_scan_count = 0;
 RTC_DATA_ATTR static int      g_rtc_rssi_threshold = -75;
@@ -713,6 +717,10 @@ void drawDetectionScreen() {
 }
 
 void alertBuzz() {
+  if (!ENABLE_ALERT_SOUND) {
+    return;
+  }
+
   M5.Speaker.begin();
   M5.Speaker.setVolume(64);
   M5.Speaker.tone(2000, 100);
@@ -734,6 +742,9 @@ void setup() {
   const bool quiet_boot = USE_DEEP_SLEEP_BETWEEN_SCANS && woke_from_timer;
 
   auto cfg = M5.config();
+  cfg.internal_spk = ENABLE_ALERT_SOUND;
+  cfg.internal_mic = ENABLE_INTERNAL_MIC;
+  cfg.output_power = ENABLE_EXTERNAL_OUTPUT_POWER;
   M5.begin(cfg);
 
   if (quiet_boot) {
@@ -808,7 +819,9 @@ void setup() {
     M5.Lcd.println("BLE initialized");
   }
 
-  M5.Speaker.setVolume(64);
+  if (ENABLE_ALERT_SOUND) {
+    M5.Speaker.setVolume(64);
+  }
   if (quiet_boot) {
     lcdSleep();
   } else {
