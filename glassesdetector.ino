@@ -73,16 +73,23 @@ static const bool        ENABLE_ALERT_SOUND = true;
 static const bool        ENABLE_INTERNAL_MIC = false;
 // StickS3's external 5V output rail is unused here and produces audible converter whine.
 static const bool        ENABLE_EXTERNAL_OUTPUT_POWER = false;
+static const bool        BLE_ACTIVE_SCAN = false;
+static const uint16_t    BLE_SCAN_INTERVAL_MS = 100;
+static const uint16_t    BLE_SCAN_WINDOW_MS = 100;
+static const uint16_t    BLE_SCAN_RESPONSE_TIMEOUT_MS = 750;
 
 RTC_DATA_ATTR static uint32_t g_rtc_scan_count = 0;
 RTC_DATA_ATTR static int      g_rtc_rssi_threshold = -75;
 RTC_DATA_ATTR static bool     g_rtc_rssi_threshold_valid = false;
+RTC_DATA_ATTR static uint32_t g_rtc_signature_last_seen_scan[16] = {0};
+RTC_DATA_ATTR static bool     g_rtc_signature_last_seen_valid[16] = {false};
 
 // ── LCD & Power State ────────────────────────────────────────────────────────
 
 static bool              g_lcd_on = true;
 static uint32_t          g_lcd_wake_time = 0;
 static bool              g_new_detection_flag = false;
+static bool              g_pending_alert = false;
 static int               g_battery_level = -1;
 static int               g_battery_voltage_mv = 0;
 static int               g_battery_filtered_mv = 0;
@@ -408,6 +415,40 @@ bool payloadContains(const std::string& mfr_data, const String& search) {
   return false;
 }
 
+uint16_t manufacturerCompanyId(const std::string& mfr_data) {
+  if (mfr_data.length() < 2) {
+    return 0;
+  }
+
+  return (uint16_t)(uint8_t)mfr_data[0] | ((uint16_t)(uint8_t)mfr_data[1] << 8);
+}
+
+bool signatureSeenRecently(uint8_t signature_index) {
+  if (signature_index >= 16 || !g_rtc_signature_last_seen_valid[signature_index]) {
+    return false;
+  }
+
+  if (g_scan_count < g_rtc_signature_last_seen_scan[signature_index]) {
+    return false;
+  }
+
+  uint32_t scan_delta = g_scan_count - g_rtc_signature_last_seen_scan[signature_index];
+  if (scan_delta == 0) {
+    return true;
+  }
+
+  return (uint64_t)scan_delta * (uint64_t)g_scan_config.interval_ms < (uint64_t)g_scan_config.display_timeout_ms;
+}
+
+void markSignatureSeen(uint8_t signature_index) {
+  if (signature_index >= 16) {
+    return;
+  }
+
+  g_rtc_signature_last_seen_scan[signature_index] = g_scan_count;
+  g_rtc_signature_last_seen_valid[signature_index] = true;
+}
+
 bool matchDevice(const NimBLEAdvertisedDevice* device, const DeviceSignature& sig) {
   const bool has_matcher =
     sig.mfr_id_count > 0 ||
@@ -468,43 +509,62 @@ bool matchDevice(const NimBLEAdvertisedDevice* device, const DeviceSignature& si
 }
 
 class ScanCallbacks : public NimBLEScanCallbacks {
-  void onResult(const NimBLEAdvertisedDevice* device) override {
+  void handleAdvertisement(const NimBLEAdvertisedDevice* device) {
     int rssi = device->getRSSI();
-    if (rssi < g_scan_config.rssi_threshold) return;
 
+    int matched_signature_index = -1;
     for (uint8_t s = 0; s < g_signature_count; s++) {
-      if (!matchDevice(device, g_signatures[s])) continue;
-
-      xSemaphoreTake(g_detection_mutex, portMAX_DELAY);
-
-      // Check if already detected (update RSSI if stronger)
-      bool found = false;
-      for (uint8_t d = 0; d < g_detection_count; d++) {
-        if (g_detections[d].label == g_signatures[s].label) {
-          if (rssi > g_detections[d].rssi) {
-            g_detections[d].rssi = rssi;
-          }
-          g_detections[d].timestamp = millis();
-          found = true;
-          break;
-        }
+      if (matchDevice(device, g_signatures[s])) {
+        matched_signature_index = s;
+        break;
       }
-
-      // Add new detection
-      if (!found && g_detection_count < 8) {
-        g_detections[g_detection_count].label      = g_signatures[s].label;
-        g_detections[g_detection_count].has_camera  = g_signatures[s].has_camera;
-        g_detections[g_detection_count].rssi        = rssi;
-        g_detections[g_detection_count].timestamp   = millis();
-        g_detection_count++;
-        g_new_detection_flag = true;
-      }
-
-      g_last_detection_time = millis();
-
-      xSemaphoreGive(g_detection_mutex);
-      break;
     }
+
+    if (rssi < g_scan_config.rssi_threshold || matched_signature_index < 0) return;
+
+    const uint8_t s = (uint8_t)matched_signature_index;
+  const bool recently_seen = signatureSeenRecently(s);
+
+    xSemaphoreTake(g_detection_mutex, portMAX_DELAY);
+
+    // Check if already detected (update RSSI if stronger)
+    bool found = false;
+    for (uint8_t d = 0; d < g_detection_count; d++) {
+      if (g_detections[d].label == g_signatures[s].label) {
+        if (rssi > g_detections[d].rssi) {
+          g_detections[d].rssi = rssi;
+        }
+        g_detections[d].timestamp = millis();
+        found = true;
+        break;
+      }
+    }
+
+    // Add new detection
+    if (!found && g_detection_count < 8) {
+      g_detections[g_detection_count].label      = g_signatures[s].label;
+      g_detections[g_detection_count].has_camera  = g_signatures[s].has_camera;
+      g_detections[g_detection_count].rssi        = rssi;
+      g_detections[g_detection_count].timestamp   = millis();
+      g_detection_count++;
+      if (!recently_seen) {
+        g_new_detection_flag = true;
+        g_pending_alert = true;
+      }
+    }
+
+    g_last_detection_time = millis();
+    markSignatureSeen(s);
+
+    xSemaphoreGive(g_detection_mutex);
+  }
+
+  void onDiscovered(const NimBLEAdvertisedDevice* device) override {
+    handleAdvertisement(device);
+  }
+
+  void onResult(const NimBLEAdvertisedDevice* device) override {
+    handleAdvertisement(device);
   }
 
   void onScanEnd(const NimBLEScanResults& results, int reason) override {
@@ -529,10 +589,16 @@ void startScan() {
   xSemaphoreGive(g_detection_mutex);
 
   NimBLEScan* scan = NimBLEDevice::getScan();
-  scan->setActiveScan(false);  // passive - don't send scan requests
-  scan->setDuplicateFilter(true);
+  scan->setActiveScan(BLE_ACTIVE_SCAN);
+  scan->setInterval(BLE_SCAN_INTERVAL_MS);
+  scan->setWindow(BLE_SCAN_WINDOW_MS);
+  scan->setScanResponseTimeout(BLE_SCAN_RESPONSE_TIMEOUT_MS);
   scan->setScanCallbacks(&g_scan_callbacks, false);
-  scan->start(g_scan_config.window_ms / 1000, false);
+  uint32_t scan_duration_ms = g_scan_config.window_ms;
+  if (scan_duration_ms == 0) {
+    scan_duration_ms = 1;
+  }
+  scan->start(scan_duration_ms, false);
   g_scanning = true;
   g_scan_count++;
   g_rtc_scan_count = g_scan_count;
@@ -702,7 +768,7 @@ void drawDetectionScreen() {
     // RSSI and camera indicator
     M5.Lcd.setTextColor(COLOR_DIM, COLOR_BG);
     M5.Lcd.setCursor(8, y + 15);
-    M5.Lcd.printf("%ddBm  %s", det.rssi, det.has_camera ? "CAM" : "NO CAM");
+    M5.Lcd.printf("%ddBm  %s", det.rssi, det.has_camera ? "Camera model" : "No-camera model");
 
     y += 30;
   }
@@ -869,13 +935,16 @@ void loop() {
   // ── Detection count changes (expiry) ──────────────────────────────────────
   xSemaphoreTake(g_detection_mutex, portMAX_DELAY);
   uint8_t current_count = g_detection_count;
+  bool should_alert = g_pending_alert;
+  g_pending_alert = false;
   xSemaphoreGive(g_detection_mutex);
 
+  if (should_alert) {
+    lcdWake();
+    alertBuzz();
+  }
+
   if (current_count != prev_detection_count) {
-    if (current_count > prev_detection_count) {
-      lcdWake();
-      alertBuzz();
-    }
     prev_detection_count = current_count;
     needs_redraw = true;
   }

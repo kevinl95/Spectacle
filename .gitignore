@@ -58,3 +58,6 @@ dkms.conf
 # IDE
 .pio/
 .vscode/
+
+# Python
+__pycache__/

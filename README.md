@@ -83,6 +83,26 @@ pio device monitor
 
 If `pio` is not on your `PATH`, the equivalent commands are `python3 -m platformio run`, `python3 -m platformio run -t upload`, `python3 -m platformio run -t uploadfs`, `python3 -m platformio run -t buildfs`, and `python3 -m platformio device monitor`.
 
+## Sanity-check without glasses
+
+If you do not have a real smart glasses pair handy, you can still verify that Spectacle detects a known signature by using the included BlueZ emulator script on a Linux machine.
+
+Requirements:
+
+- Linux with a BLE adapter supported by BlueZ advertising
+- `python3`, `dbus-python`, and `PyGObject`
+- enough privilege to register BLE advertisements, typically `sudo`
+
+Run the emulator:
+
+```bash
+sudo python3 scripts/emulate_meta_rayban.py --adapter hci0
+```
+
+The script defaults to a scannable `peripheral` advertisement that matches Spectacle's Meta Ray-Ban signature. With the Linux host near the StickS3, Spectacle should show `Meta Ray-Ban` on screen within a scan cycle.
+
+This is a sanity-check for the firmware's detection path and UI flow. It does not prove that a real pair uses the exact same RF behavior or that every field shown on-screen was inferred from the live packet.
+
 ## Automated releases
 
 The repository now includes `.github/workflows/weekly-firmware.yml`, which:
