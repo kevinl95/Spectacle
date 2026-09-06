@@ -79,7 +79,9 @@
       "id": "even_realities",
       "label": "Even Realities G1",
       "has_camera": false,
-      "manufacturer_ids": [],
+      "manufacturer_ids": [
+        "0x10F9"
+      ],
       "payload_strings": [],
       "name_prefixes": [
         "G1",
